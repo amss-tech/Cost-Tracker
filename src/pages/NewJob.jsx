@@ -9,7 +9,7 @@ export default function NewJob() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState({
-    job_number: '', job_type: 'ES', project_manager: '',
+    job_number: '', job_type: 'ES', project_manager: '', status: 'Active',
     job_description: '', estimated_revenue: '', estimated_cost: '',
     pct_complete: '', estimated_completion_date: '', notes: '',
     jtd_billing: '', jtd_cost: '', source: 'manual'
@@ -69,6 +69,13 @@ export default function NewJob() {
                 <label>Job Type</label>
                 <select value={form.job_type} onChange={e => set('job_type', e.target.value)}>
                   {TYPES.map(t => <option key={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Status</label>
+                <select value={form.status} onChange={e => set('status', e.target.value)}>
+                  <option value="Active">Active</option>
+                  <option value="Pipeline">Pipeline</option>
                 </select>
               </div>
               <div className="form-group">

@@ -4,35 +4,6 @@ import { supabase } from '../lib/supabase'
 import { fmt, riskBadge, gmCell, gmPct } from '../lib/utils'
 import { Download, Layers } from 'lucide-react'
 
-const MONTHLY_REV_TARGET = 400_000
-const MONTHLY_COST_TARGET = 300_000
-const YEARLY_REV_TARGET = 6_000_000
-const YEARLY_COST_TARGET = 3_600_000
-
-function ProgressCard({ label, value, target, targetLabel }) {
-  const pct = target > 0 ? Math.min(100, (value / target) * 100) : 0
-  const remaining = Math.max(0, target - value)
-  const over = value >= target
-  const barColor = over ? 'var(--color-success)'
-    : pct >= 75 ? 'var(--color-primary)'
-    : pct >= 40 ? 'var(--color-warning)'
-    : 'var(--color-danger)'
-  return (
-    <div className="metric-card">
-      <div className="metric-label">{label}</div>
-      <div className="metric-value" style={{ fontSize: 20 }}>{fmt.currency(value)}</div>
-      <div style={{ margin: '8px 0 3px', height: 6, background: 'var(--color-border)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 3, transition: 'width 0.4s' }} />
-      </div>
-      <div className="metric-sub" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span>{pct.toFixed(1)}% of {targetLabel}</span>
-        <span style={{ color: over ? 'var(--color-success)' : 'inherit' }}>
-          {over ? 'Target met' : `${fmt.currency(remaining)} left`}
-        </span>
-      </div>
-    </div>
-  )
-}
 
 export default function WIPCompare() {
   const navigate = useNavigate()
@@ -44,7 +15,11 @@ export default function WIPCompare() {
   const [poLineItems, setPoLineItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [filterFlag, setFilterFlag] = useState('')
-  const [periodView, setPeriodView] = useState('mtd')
+  const now = new Date()
+  const defaultFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const defaultTo = now.toISOString().split('T')[0]
+  const [periodFrom, setPeriodFrom] = useState(defaultFrom)
+  const [periodTo, setPeriodTo] = useState(defaultTo)
   const [seeding, setSeeding] = useState(false)
   const [seedPreview, setSeedPreview] = useState(null)
   const [seedResult, setSeedResult] = useState(null)
@@ -140,12 +115,15 @@ export default function WIPCompare() {
     const openCommit = openCommitByJob[j.id] || 0
     const leftToBill = (j.estimated_revenue || 0) - billedToDate
     const estGM = gmPct(j.estimated_revenue, j.estimated_cost)
-    const actualGM = billedToDate > 0 ? gmPct(billedToDate, tracked) : null
+    // Same formula as Job Detail: GM% using estimated revenue vs actual tracked costs
+    const actualGM = (j.estimated_revenue > 0 && tracked > 0) ? gmPct(j.estimated_revenue, tracked) : null
     let flag = 'No data'
-    if (tracked > 0) {
-      if (variance <= -5000) flag = 'Over'
-      else if (variance < 0) flag = 'Watch'
-      else flag = 'On Track'
+    if (estGM != null && actualGM != null) {
+      flag = actualGM < estGM ? 'Over' : 'On Track'
+    } else if (tracked > 0 && estGM == null) {
+      flag = 'No Est. Rev.'
+    } else if (tracked > 0) {
+      flag = 'Watch'
     }
     return { ...j, tracked, variance, variancePct, flag, billedToDate, openCommit, leftToBill, estGM, actualGM }
   })
@@ -161,27 +139,36 @@ export default function WIPCompare() {
   const totalActualGMdollar = totalBilled - totalTracked
   const totalActualGMpct = totalBilled > 0 ? totalActualGMdollar / totalBilled : null
 
-  // Period calculations — ISO string comparison is safe for YYYY-MM-DD
-  const now = new Date()
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-  const yearStart = `${now.getFullYear()}-01-01`
+  // Period activity — per job, based on Posted in Foundation dates
+  const periodBillingsByJob = {}
+  billings.forEach(b => {
+    if (b.date_submitted && b.date_submitted >= periodFrom && b.date_submitted <= periodTo)
+      periodBillingsByJob[b.job_id] = (periodBillingsByJob[b.job_id] || 0) + (b.amount || 0)
+  })
 
-  // MTD/YTD cost = invoiced PO lines + posted direct invoices + posted uncommitted
-  function lineItemPeriodSum(cutoff) {
-    return poLineItems
-      .filter(li => li.invoiced && li.invoice_date && li.invoice_date >= cutoff)
-      .reduce((s, li) => s + (parseFloat(li.qty) || 0) * (parseFloat(li.price_each) || 0), 0)
-  }
+  const periodCostsByJob = {}
+  poLineItems.forEach(li => {
+    if (li.invoiced && li.invoice_date && li.invoice_date >= periodFrom && li.invoice_date <= periodTo && li.purchase_orders?.job_id) {
+      const jid = li.purchase_orders.job_id
+      periodCostsByJob[jid] = (periodCostsByJob[jid] || 0) + (parseFloat(li.qty) || 0) * (parseFloat(li.price_each) || 0)
+    }
+  })
+  invoices.forEach(inv => {
+    if (!inv.po_id && inv.foundation_status === 'Posted in Foundation' && inv.date_received && inv.date_received >= periodFrom && inv.date_received <= periodTo)
+      periodCostsByJob[inv.job_id] = (periodCostsByJob[inv.job_id] || 0) + (inv.amount || 0)
+  })
+  uncommitted.forEach(u => {
+    if (u.posted && u.cost_date && u.cost_date >= periodFrom && u.cost_date <= periodTo)
+      periodCostsByJob[u.job_id] = (periodCostsByJob[u.job_id] || 0) + (u.amount || 0)
+  })
 
-  const mtdRevenue = billings.filter(b => b.date_submitted && b.date_submitted >= monthStart).reduce((s, b) => s + (b.amount || 0), 0)
-  const mtdCosts = lineItemPeriodSum(monthStart)
-    + invoices.filter(inv => !inv.po_id && inv.foundation_status === 'Posted in Foundation' && inv.date_received >= monthStart).reduce((s, i) => s + (i.amount || 0), 0)
-    + uncommitted.filter(u => u.posted && u.cost_date && u.cost_date >= monthStart).reduce((s, u) => s + (u.amount || 0), 0)
+  const periodRows = jobs
+    .map(j => ({ ...j, periodBillings: periodBillingsByJob[j.id] || 0, periodCosts: periodCostsByJob[j.id] || 0 }))
+    .filter(r => r.periodBillings > 0 || r.periodCosts > 0)
+    .sort((a, b) => b.periodBillings - a.periodBillings)
 
-  const ytdRevenue = billings.filter(b => b.date_submitted && b.date_submitted >= yearStart).reduce((s, b) => s + (b.amount || 0), 0)
-  const ytdCosts = lineItemPeriodSum(yearStart)
-    + invoices.filter(inv => !inv.po_id && inv.foundation_status === 'Posted in Foundation' && inv.date_received >= yearStart).reduce((s, i) => s + (i.amount || 0), 0)
-    + uncommitted.filter(u => u.posted && u.cost_date && u.cost_date >= yearStart).reduce((s, u) => s + (u.amount || 0), 0)
+  const periodTotalBillings = periodRows.reduce((s, r) => s + r.periodBillings, 0)
+  const periodTotalCosts = periodRows.reduce((s, r) => s + r.periodCosts, 0)
 
   const overJobs = rows.filter(r => r.flag === 'Over')
 
@@ -190,7 +177,7 @@ export default function WIPCompare() {
       'Open Commits', 'Variance $', 'Variance %', 'Est GM%', 'Actual GM%', 'Billed to Date', 'Left to Bill', 'Flag']
     const csvRows = rows.map(r => [
       r.job_number, `"${r.job_description}"`, r.project_manager,
-      r.estimated_revenue, r.estimated_cost, r.tracked.toFixed(2),
+      r.estimated_revenue || '', r.estimated_cost, r.tracked.toFixed(2),
       r.openCommit.toFixed(2), r.variance.toFixed(2), (r.variancePct * 100).toFixed(1) + '%',
       r.estGM != null ? (r.estGM * 100).toFixed(1) + '%' : '',
       r.actualGM != null ? (r.actualGM * 100).toFixed(1) + '%' : '',
@@ -303,50 +290,10 @@ export default function WIPCompare() {
           </div>
         </div>
 
-        {/* Period Performance */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-2)' }}>Period Performance</span>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <button
-                onClick={() => setPeriodView('mtd')}
-                className="btn btn-sm"
-                style={{
-                  background: periodView === 'mtd' ? 'var(--color-primary)' : 'transparent',
-                  color: periodView === 'mtd' ? '#fff' : 'var(--color-text-2)',
-                  border: periodView === 'mtd' ? 'none' : '1px solid var(--color-border)',
-                }}>
-                MTD
-              </button>
-              <button
-                onClick={() => setPeriodView('ytd')}
-                className="btn btn-sm"
-                style={{
-                  background: periodView === 'ytd' ? 'var(--color-primary)' : 'transparent',
-                  color: periodView === 'ytd' ? '#fff' : 'var(--color-text-2)',
-                  border: periodView === 'ytd' ? 'none' : '1px solid var(--color-border)',
-                }}>
-                YTD
-              </button>
-            </div>
-          </div>
-          {periodView === 'mtd' ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <ProgressCard label="MTD Revenue" value={mtdRevenue} target={MONTHLY_REV_TARGET} targetLabel="$400k" />
-              <ProgressCard label="MTD Cost" value={mtdCosts} target={MONTHLY_COST_TARGET} targetLabel="$300k" />
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <ProgressCard label="YTD Revenue" value={ytdRevenue} target={YEARLY_REV_TARGET} targetLabel="$6M" />
-              <ProgressCard label="YTD Earned Revenue" value={ytdCosts} target={YEARLY_COST_TARGET} targetLabel="$3.6M" />
-            </div>
-          )}
-        </div>
-
         <div className="filter-row" style={{ marginBottom: 14 }}>
           <select value={filterFlag} onChange={e => setFilterFlag(e.target.value)}>
             <option value="">All Jobs</option>
-            <option>Over</option><option>Watch</option><option>On Track</option><option>No data</option>
+            <option>Over</option><option>Watch</option><option>On Track</option><option>No Est. Rev.</option><option>No data</option>
           </select>
           {overJobs.length > 0 && (
             <span style={{ fontSize: 12, color: 'var(--color-danger)', marginLeft: 8 }}>
@@ -360,6 +307,7 @@ export default function WIPCompare() {
             <table>
               <thead><tr>
                 <th>Job #</th><th>Description</th><th>PM</th>
+                <th className="text-right">Est. Revenue</th>
                 <th className="text-right">WIP Est. Cost</th>
                 <th className="text-right">Tracked Cost</th>
                 <th className="text-right">Open Commits</th>
@@ -373,12 +321,15 @@ export default function WIPCompare() {
               </tr></thead>
               <tbody>
                 {filtered.length === 0
-                  ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--color-text-3)', padding: 32 }}>No jobs match this filter.</td></tr>
+                  ? <tr><td colSpan={14} style={{ textAlign: 'center', color: 'var(--color-text-3)', padding: 32 }}>No jobs match this filter.</td></tr>
                   : filtered.map(r => (
                     <tr key={r.id} className="clickable" onClick={() => navigate(`/jobs/${r.id}`)}>
                       <td className="fw-500">{r.job_number}</td>
                       <td>{r.job_description}</td>
                       <td>{r.project_manager}</td>
+                      <td className="text-right" style={{ color: !r.estimated_revenue ? 'var(--color-warning)' : 'inherit' }}>
+                        {r.estimated_revenue ? fmt.currency(r.estimated_revenue) : <span style={{ fontSize: 11 }}>missing</span>}
+                      </td>
                       <td className="text-right">{fmt.currency(r.estimated_cost)}</td>
                       <td className="text-right">{r.tracked > 0 ? fmt.currency(r.tracked) : <span className="text-muted">—</span>}</td>
                       <td className="text-right" style={{ color: r.openCommit > 0 ? 'var(--color-warning)' : 'inherit' }}>
@@ -396,7 +347,13 @@ export default function WIPCompare() {
                       <td className="text-right" style={{ color: r.leftToBill < 0 ? 'var(--color-danger)' : r.leftToBill === 0 ? 'var(--color-success)' : 'inherit' }}>
                         {fmt.currency(r.leftToBill)}
                       </td>
-                      <td>{r.tracked > 0 ? riskBadge(r.variance) : <span className="badge badge-gray">No data</span>}</td>
+                      <td>
+                        {r.flag === 'Over' && <span className="badge badge-red">Over</span>}
+                        {r.flag === 'Watch' && <span className="badge badge-amber">Watch</span>}
+                        {r.flag === 'On Track' && <span className="badge badge-green">On Track</span>}
+                        {r.flag === 'No Est. Rev.' && <span className="badge badge-amber" title="Has billing but no estimated revenue — edit job to add Est. Revenue">No Est. Rev.</span>}
+                        {r.flag === 'No data' && <span className="badge badge-gray">No data</span>}
+                      </td>
                     </tr>
                   ))
                 }
@@ -404,6 +361,66 @@ export default function WIPCompare() {
             </table>
           </div>
         </div>
+
+        {/* Period Activity */}
+        <div style={{ marginTop: 32 }}>
+          <div className="section-header">
+            <span className="section-title">Period Activity</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12, color: 'var(--color-text-2)' }}>From</label>
+            <input type="date" value={periodFrom} onChange={e => setPeriodFrom(e.target.value)} style={{ fontSize: 13 }} />
+            <label style={{ fontSize: 12, color: 'var(--color-text-2)' }}>To</label>
+            <input type="date" value={periodTo} onChange={e => setPeriodTo(e.target.value)} style={{ fontSize: 13 }} />
+            <button className="btn btn-sm" onClick={() => { setPeriodFrom(defaultFrom); setPeriodTo(defaultTo) }}>
+              This Month
+            </button>
+          </div>
+          {periodRows.length === 0 ? (
+            <div style={{ color: 'var(--color-text-3)', fontSize: 13, padding: '16px 0' }}>
+              No billing or posted cost activity in this period.
+            </div>
+          ) : (
+            <div className="card"><div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>Job #</th>
+                  <th>Description</th>
+                  <th className="text-right">Billings</th>
+                  <th className="text-right">Costs</th>
+                  <th className="text-right">Net</th>
+                </tr></thead>
+                <tbody>
+                  {periodRows.map(r => {
+                    const net = r.periodBillings - r.periodCosts
+                    return (
+                      <tr key={r.id} className="clickable" onClick={() => navigate(`/jobs/${r.id}`)}>
+                        <td className="fw-500">{r.job_number}</td>
+                        <td>{r.job_description}</td>
+                        <td className="text-right">{r.periodBillings > 0 ? fmt.currency(r.periodBillings) : <span className="text-muted">—</span>}</td>
+                        <td className="text-right">{r.periodCosts > 0 ? fmt.currency(r.periodCosts) : <span className="text-muted">—</span>}</td>
+                        <td className={`text-right fw-500 ${net < 0 ? 'text-danger' : 'text-success'}`}>
+                          {(net >= 0 ? '+' : '') + fmt.currency(net)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: '2px solid var(--color-border)', fontWeight: 600 }}>
+                    <td colSpan={2} style={{ fontSize: 12, color: 'var(--color-text-2)' }}>Period Total</td>
+                    <td className="text-right">{fmt.currency(periodTotalBillings)}</td>
+                    <td className="text-right">{fmt.currency(periodTotalCosts)}</td>
+                    <td className={`text-right ${periodTotalBillings - periodTotalCosts < 0 ? 'text-danger' : 'text-success'}`}>
+                      {(periodTotalBillings - periodTotalCosts >= 0 ? '+' : '') + fmt.currency(periodTotalBillings - periodTotalCosts)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div></div>
+          )}
+        </div>
+
       </div>
     </>
   )

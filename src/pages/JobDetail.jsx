@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
-import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock } from 'lucide-react'
 
 export default function JobDetail() {
   const { id } = useParams()
@@ -21,6 +21,8 @@ export default function JobDetail() {
   const [documents, setDocuments] = useState([])
   const [docForm, setDocForm] = useState({ label: '', url: '' })
   const [confirmComplete, setConfirmComplete] = useState(false)
+  const [lockCostsOnComplete, setLockCostsOnComplete] = useState(false)
+  const [confirmLockCosts, setConfirmLockCosts] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -83,9 +85,19 @@ export default function JobDetail() {
   }
 
   async function setJobStatus(status) {
-    await supabase.from('jobs').update({ status }).eq('id', id)
-    setJob(j => ({ ...j, status }))
+    const updates = { status }
+    if (status === 'Complete' && lockCostsOnComplete && trackedTotal > 0)
+      updates.estimated_cost = trackedTotal
+    await supabase.from('jobs').update(updates).eq('id', id)
+    setJob(j => ({ ...j, ...updates }))
     setConfirmComplete(false)
+    setLockCostsOnComplete(false)
+  }
+
+  async function lockCostToActual() {
+    await supabase.from('jobs').update({ estimated_cost: trackedTotal }).eq('id', id)
+    setJob(j => ({ ...j, estimated_cost: trackedTotal }))
+    setConfirmLockCosts(false)
   }
 
   async function deleteJob() {
@@ -225,16 +237,17 @@ export default function JobDetail() {
                   <RotateCcw size={13} /> Reopen
                 </button>
               ) : confirmComplete ? (
-                <>
-                  <span style={{ fontSize: 12, color: 'var(--color-text-2)' }}>Mark as complete?</span>
-                  <button className="btn btn-sm btn-primary" onClick={() => setJobStatus('Complete')}>Yes, Complete</button>
-                  <button className="btn btn-sm" onClick={() => setConfirmComplete(false)}>Cancel</button>
-                </>
+                <button className="btn btn-sm" onClick={() => { setConfirmComplete(false); setLockCostsOnComplete(false) }}>Cancel</button>
               ) : (
                 <>
                   <button className="btn btn-sm" onClick={() => navigate(`/po-entry?job=${id}`)}><Plus size={13} /> PO</button>
                   <button className="btn btn-sm" onClick={() => navigate(`/invoice-entry?job=${id}`)}><Plus size={13} /> Invoice</button>
                   <button className="btn btn-sm" onClick={() => navigate(`/billing-entry?job=${id}`)}><Plus size={13} /> Billing</button>
+                  {trackedTotal > 0 && Math.abs(trackedTotal - (job.estimated_cost || 0)) > 1 && (
+                    <button className="btn btn-sm" onClick={() => setConfirmLockCosts(true)} title="Set estimated cost to match actual tracked costs">
+                      <Lock size={13} /> Lock Costs
+                    </button>
+                  )}
                   <button className="btn btn-sm" onClick={() => setConfirmComplete(true)} title="Mark job as complete">
                     <CheckCircle size={13} /> Complete Job
                   </button>
@@ -247,6 +260,40 @@ export default function JobDetail() {
           )}
         </div>
       </div>
+
+      {confirmComplete && (
+        <div style={{ background: 'var(--color-sidebar)', border: '1px solid var(--color-border)', borderRadius: 8, padding: '14px 20px', margin: '0 20px 0' }}>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Mark this job as complete?</div>
+          {trackedTotal > 0 && Math.abs(trackedTotal - (job.estimated_cost || 0)) > 1 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={lockCostsOnComplete} onChange={e => setLockCostsOnComplete(e.target.checked)} />
+              Also update Estimated Cost from {fmt.currency(job.estimated_cost)} → {fmt.currency(trackedTotal)} to match actual tracked costs
+            </label>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-sm btn-primary" onClick={() => setJobStatus('Complete')}>
+              <CheckCircle size={13} /> Yes, Mark Complete
+            </button>
+            <button className="btn btn-sm" onClick={() => { setConfirmComplete(false); setLockCostsOnComplete(false) }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {confirmLockCosts && (
+        <div style={{ background: 'var(--color-sidebar)', border: '1px solid var(--color-border)', borderRadius: 8, padding: '14px 20px', margin: '0 20px 0' }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Lock Estimated Cost to Actual?</div>
+          <div style={{ fontSize: 13, color: 'var(--color-text-2)', marginBottom: 12 }}>
+            Estimated Cost will change from {fmt.currency(job.estimated_cost)} → {fmt.currency(trackedTotal)}.
+            Variance becomes $0 and the GM% reflects actual performance.
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-sm btn-primary" onClick={lockCostToActual}>
+              <Lock size={13} /> Yes, Lock Costs
+            </button>
+            <button className="btn btn-sm" onClick={() => setConfirmLockCosts(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       <div className="job-detail-header">
         <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>

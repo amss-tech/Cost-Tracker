@@ -15,7 +15,7 @@ import UncommittedCosts from './pages/UncommittedCosts'
 import WIPImport from './pages/WIPImport'
 import WIPCompare from './pages/WIPCompare'
 import Reports from './pages/Reports'
-import BillingForecast from './pages/BillingForecast'
+import Forecast from './pages/BillingForecast'
 import TimecardImport from './pages/TimecardImport'
 import OverheadHours from './pages/OverheadHours'
 
@@ -59,7 +59,7 @@ export default function App() {
                 <Route path="/wip-import" element={<WIPImport />} />
                 <Route path="/wip-compare" element={<WIPCompare />} />
                 <Route path="/reports" element={<Reports />} />
-                <Route path="/billing-forecast" element={<BillingForecast />} />
+                <Route path="/forecast" element={<Forecast />} />
                 <Route path="/timecard-import" element={<TimecardImport />} />
                 <Route path="/overhead-hours" element={<OverheadHours />} />
               </Routes>
