@@ -7,11 +7,17 @@ import Dashboard from './pages/Dashboard'
 import Jobs from './pages/Jobs'
 import JobDetail from './pages/JobDetail'
 import NewJob from './pages/NewJob'
+import EditJob from './pages/EditJob'
 import POEntry from './pages/POEntry'
 import InvoiceEntry from './pages/InvoiceEntry'
+import BillingEntry from './pages/BillingEntry'
 import UncommittedCosts from './pages/UncommittedCosts'
 import WIPImport from './pages/WIPImport'
 import WIPCompare from './pages/WIPCompare'
+import Reports from './pages/Reports'
+import BillingForecast from './pages/BillingForecast'
+import TimecardImport from './pages/TimecardImport'
+import OverheadHours from './pages/OverheadHours'
 
 function PrivateRoute({ session, children }) {
   if (!session) return <Navigate to="/login" replace />
@@ -45,11 +51,17 @@ export default function App() {
                 <Route path="/jobs" element={<Jobs />} />
                 <Route path="/jobs/new" element={<NewJob />} />
                 <Route path="/jobs/:id" element={<JobDetail />} />
+                <Route path="/jobs/:id/edit" element={<EditJob />} />
                 <Route path="/po-entry" element={<POEntry />} />
                 <Route path="/invoice-entry" element={<InvoiceEntry />} />
+                <Route path="/billing-entry" element={<BillingEntry />} />
                 <Route path="/uncommitted" element={<UncommittedCosts />} />
                 <Route path="/wip-import" element={<WIPImport />} />
                 <Route path="/wip-compare" element={<WIPCompare />} />
+                <Route path="/reports" element={<Reports />} />
+                <Route path="/billing-forecast" element={<BillingForecast />} />
+                <Route path="/timecard-import" element={<TimecardImport />} />
+                <Route path="/overhead-hours" element={<OverheadHours />} />
               </Routes>
             </Shell>
           </PrivateRoute>

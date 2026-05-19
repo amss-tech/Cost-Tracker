@@ -2,29 +2,49 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt } from '../lib/utils'
+import RecordNotes from '../components/RecordNotes'
 
-const CATEGORIES = ['Labor — Hours × Rate', 'Material Received (Not Invoiced)', 'Subcontractor Draw']
+const CATEGORIES = ['Labor — Hours × Rate', 'Material Received (Not Invoiced)', 'Subcontractor Draw', 'Fuel', 'Per Diem']
 
 export default function UncommittedCosts() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
+  const editId = params.get('edit')
   const [jobs, setJobs] = useState([])
   const [recent, setRecent] = useState([])
   const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(!!editId)
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
   const [form, setForm] = useState({
     job_id: params.get('job') || '',
     category: 'Labor — Hours × Rate',
     description: '', cost_date: new Date().toISOString().split('T')[0],
-    hours: '', rate: '', amount: ''
+    hours: '', rate: '', amount: '', posted: false
   })
 
   useEffect(() => {
     supabase.from('jobs').select('id, job_number, job_description').order('job_number')
       .then(({ data }) => setJobs(data || []))
-    loadRecent()
+    if (!editId) loadRecent()
   }, [])
+
+  useEffect(() => {
+    if (!editId) return
+    supabase.from('uncommitted_costs').select('*').eq('id', editId).single()
+      .then(({ data }) => {
+        if (data) setForm({
+          job_id: data.job_id || '',
+          category: data.category || 'Labor — Hours × Rate',
+          description: data.description || '',
+          cost_date: data.cost_date || new Date().toISOString().split('T')[0],
+          hours: data.hours ?? '',
+          rate: data.rate ?? '',
+          amount: data.amount ?? '',
+          posted: data.posted ?? false,
+        })
+        setLoading(false)
+      })
+  }, [editId])
 
   async function loadRecent() {
     const { data } = await supabase.from('uncommitted_costs')
@@ -36,7 +56,6 @@ export default function UncommittedCosts() {
   function set(field, val) {
     setForm(f => {
       const next = { ...f, [field]: val }
-      // Auto-calc amount from hours × rate
       if (field === 'hours' || field === 'rate') {
         const h = parseFloat(field === 'hours' ? val : next.hours) || 0
         const r = parseFloat(field === 'rate' ? val : next.rate) || 0
@@ -48,45 +67,49 @@ export default function UncommittedCosts() {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    setSaving(true); setError(''); setSuccess('')
+    setSaving(true); setError('')
     if (!form.job_id) { setError('Please select a job.'); setSaving(false); return }
     if (!form.amount) { setError('Amount is required.'); setSaving(false); return }
 
-    const { error: err } = await supabase.from('uncommitted_costs').insert({
-      job_id: form.job_id,
+    const payload = {
       category: form.category,
       description: form.description,
       cost_date: form.cost_date || null,
       hours: parseFloat(form.hours) || null,
       rate: parseFloat(form.rate) || null,
       amount: parseFloat(form.amount) || 0,
-    })
+      posted: form.posted,
+    }
+
+    let err
+    if (editId) {
+      ;({ error: err } = await supabase.from('uncommitted_costs').update(payload).eq('id', editId))
+    } else {
+      ;({ error: err } = await supabase.from('uncommitted_costs').insert({ ...payload, job_id: form.job_id }))
+    }
     if (err) { setError(err.message); setSaving(false); return }
 
-    setSuccess('Cost entry saved!')
-    setForm(f => ({ ...f, description:'', hours:'', rate:'', amount:'' }))
-    setSaving(false)
-    setTimeout(() => setSuccess(''), 3000)
-    loadRecent()
+    navigate(`/jobs/${form.job_id}`)
   }
 
   const isLabor = form.category === 'Labor — Hours × Rate'
 
+  if (loading) return <div className="loading-center"><div className="spinner" /></div>
+
   return (
     <>
-      <div className="topbar"><span className="topbar-title">Uncommitted Costs</span></div>
+      <div className="topbar"><span className="topbar-title">{editId ? 'Edit Cost Entry' : 'Uncommitted Costs'}</span></div>
       <div className="page">
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24 }}>
-          <div>
+        <div style={{ display:'grid', gridTemplateColumns: editId ? '1fr' : '1fr 1fr', gap:24 }}>
+          <div style={{ maxWidth: editId ? 680 : undefined }}>
             <form onSubmit={handleSubmit}>
               {error && <div className="auth-error" style={{ marginBottom:12 }}>{error}</div>}
-              {success && <div style={{ background:'#EAF3DE', color:'#3B6D11', padding:'10px 14px', borderRadius:8, marginBottom:12, fontSize:13 }}>{success}</div>}
 
               <div className="form-section">
                 <div className="form-section-title">Cost Entry</div>
                 <div className="form-group" style={{ marginBottom:12 }}>
                   <label>Job *</label>
-                  <select value={form.job_id} onChange={e => set('job_id', e.target.value)} required>
+                  <select value={form.job_id} onChange={e => set('job_id', e.target.value)} required disabled={!!editId}>
                     <option value="">— Select Job —</option>
                     {jobs.map(j => <option key={j.id} value={j.id}>{j.job_number} — {j.job_description}</option>)}
                   </select>
@@ -123,43 +146,53 @@ export default function UncommittedCosts() {
                   <label>Description</label>
                   <textarea placeholder="What is this cost for?" value={form.description} onChange={e => set('description', e.target.value)} style={{ minHeight:60 }} />
                 </div>
+                <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none', marginBottom:4 }}>
+                  <input type="checkbox" checked={form.posted} onChange={e => set('posted', e.target.checked)}
+                    style={{ width:15, height:15, cursor:'pointer' }} />
+                  <span style={{ fontSize:13, color:'var(--color-text)' }}>Posted to Foundation</span>
+                </label>
               </div>
 
               <div className="form-actions">
                 <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? <span className="spinner" style={{ width:14,height:14 }} /> : 'Add Cost'}
+                  {saving ? <span className="spinner" style={{ width:14,height:14 }} /> : editId ? 'Save Changes' : 'Add Cost'}
                 </button>
-                <button type="button" className="btn" onClick={() => setForm(f => ({ ...f, description:'', hours:'', rate:'', amount:'' }))}>
-                  Clear
-                </button>
+                {editId
+                  ? <button type="button" className="btn" onClick={() => navigate(`/jobs/${form.job_id}`)}>Cancel</button>
+                  : <button type="button" className="btn" onClick={() => setForm(f => ({ ...f, description:'', hours:'', rate:'', amount:'' }))}>Clear</button>
+                }
               </div>
             </form>
           </div>
 
-          <div>
-            <div className="section-header"><span className="section-title">Recent entries</span></div>
-            <div className="card">
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Job</th><th>Category</th><th>Description</th><th>Date</th><th className="text-right">Amount</th></tr></thead>
-                  <tbody>
-                    {recent.length === 0
-                      ? <tr><td colSpan={5} style={{ textAlign:'center', color:'var(--color-text-3)', padding:24 }}>No entries yet.</td></tr>
-                      : recent.map(r => (
-                        <tr key={r.id} className="clickable" onClick={() => navigate(`/jobs/${r.job_id}`)}>
-                          <td className="fw-500">{r.jobs?.job_number}</td>
-                          <td><span className="badge badge-blue" style={{ fontSize:10 }}>{r.category?.split(' ')[0]}</span></td>
-                          <td style={{ maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.description}</td>
-                          <td>{fmt.date(r.cost_date)}</td>
-                          <td className="text-right fw-500">{fmt.currency(r.amount)}</td>
-                        </tr>
-                      ))
-                    }
-                  </tbody>
-                </table>
+          {editId && <RecordNotes entityType="uncommitted_cost" entityId={editId} />}
+
+          {!editId && (
+            <div>
+              <div className="section-header"><span className="section-title">Recent entries</span></div>
+              <div className="card">
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>Job</th><th>Category</th><th>Description</th><th>Date</th><th className="text-right">Amount</th></tr></thead>
+                    <tbody>
+                      {recent.length === 0
+                        ? <tr><td colSpan={5} style={{ textAlign:'center', color:'var(--color-text-3)', padding:24 }}>No entries yet.</td></tr>
+                        : recent.map(r => (
+                          <tr key={r.id} className="clickable" onClick={() => navigate(`/jobs/${r.job_id}`)}>
+                            <td className="fw-500">{r.jobs?.job_number}</td>
+                            <td><span className="badge badge-blue" style={{ fontSize:10 }}>{r.category?.split(' ')[0]}</span></td>
+                            <td style={{ maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.description}</td>
+                            <td>{fmt.date(r.cost_date)}</td>
+                            <td className="text-right fw-500">{fmt.currency(r.amount)}</td>
+                          </tr>
+                        ))
+                      }
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </>

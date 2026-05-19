@@ -22,6 +22,7 @@
   font-size: 14px;
 }
 
+/* System preference fallback (before JS runs) */
 @media (prefers-color-scheme: dark) {
   :root {
     --color-bg: #1a1918;
@@ -32,8 +33,58 @@
     --color-text: #eeecea;
     --color-text-2: #aaa89f;
     --color-text-3: #6e6c66;
+    --color-primary: #4D9FE8;
+    --color-primary-dark: #3D8FE0;
+    --color-success: #65A832;
+    --color-warning: #C87A30;
+    --color-danger: #D94F4F;
   }
 }
+
+/* Manual overrides — take priority over @media */
+[data-theme="light"] {
+  --color-bg: #f7f7f5;
+  --color-surface: #ffffff;
+  --color-sidebar: #f1f0ee;
+  --color-border: rgba(0,0,0,0.10);
+  --color-border-strong: rgba(0,0,0,0.18);
+  --color-text: #1a1a18;
+  --color-text-2: #5f5e5a;
+  --color-text-3: #888780;
+  --color-primary: #185FA5;
+  --color-primary-dark: #0C447C;
+  --color-success: #3B6D11;
+  --color-warning: #854F0B;
+  --color-danger: #A32D2D;
+}
+[data-theme="dark"] {
+  --color-bg: #1a1918;
+  --color-surface: #242320;
+  --color-sidebar: #1f1e1c;
+  --color-border: rgba(255,255,255,0.10);
+  --color-border-strong: rgba(255,255,255,0.18);
+  --color-text: #eeecea;
+  --color-text-2: #aaa89f;
+  --color-text-3: #6e6c66;
+  --color-primary: #4D9FE8;
+  --color-primary-dark: #3D8FE0;
+  --color-success: #65A832;
+  --color-warning: #C87A30;
+  --color-danger: #D94F4F;
+}
+
+/* Badge overrides for dark mode */
+[data-theme="dark"] .badge-green { background: rgba(59,109,17,0.28); color: #8DD94A; }
+[data-theme="dark"] .badge-amber { background: rgba(133,79,11,0.28); color: #F0A050; }
+[data-theme="dark"] .badge-red   { background: rgba(163,45,45,0.28); color: #F07070; }
+[data-theme="dark"] .badge-blue  { background: rgba(24,95,165,0.28); color: #6BB5F5; }
+[data-theme="dark"] .badge-gray  { background: rgba(95,94,90,0.22);  color: #b0b0aa; }
+
+/* Hardcoded-color element overrides for dark mode */
+[data-theme="dark"] .btn-danger         { background: rgba(163,45,45,0.22); border-color: rgba(163,45,45,0.45); }
+[data-theme="dark"] .auth-error         { background: rgba(163,45,45,0.22); }
+[data-theme="dark"] .cost-box.alert     { border-color: rgba(217,79,79,0.40); }
+[data-theme="dark"] .diff-val.changed   { background: rgba(133,79,11,0.22); color: #F0A050; }
 
 body {
   font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -139,7 +190,7 @@ a { color: inherit; text-decoration: none; }
 .card-pad { padding: 16px 20px; }
 
 /* METRIC CARDS */
-.metric-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 20px; }
+.metric-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 20px; }
 .metric-card {
   background: var(--color-sidebar);
   border-radius: var(--radius-md);
@@ -337,3 +388,19 @@ textarea { resize: vertical; min-height: 70px; }
 .po-item-vendor { font-size: 12px; color: var(--color-text-3); margin-top: 2px; }
 .po-item-amount { font-size: 14px; font-weight: 500; text-align: right; }
 .po-item-status { font-size: 11px; color: var(--color-text-3); margin-top: 2px; text-align: right; }
+
+/* Report styles */
+.print-header { display: none; }
+.text-warning { color: var(--color-warning); }
+
+@media print {
+  .sidebar, .topbar, .no-print { display: none !important; }
+  .main { width: 100%; padding: 0; }
+  .page { padding: 16px; }
+  .app-shell { display: block; }
+  body { background: #fff; color: #000; }
+  .card { box-shadow: none; border: 1px solid #ccc; }
+  .print-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; font-size: 16px; border-bottom: 2px solid #000; padding-bottom: 8px; }
+  .metric-card { box-shadow: none; border: 1px solid #ccc; }
+  tfoot tr td { background: #f5f5f5; }
+}

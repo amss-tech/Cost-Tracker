@@ -23,8 +23,8 @@ function parseWIPRows(rows) {
   //          17=Revenue Change, 18=Cost Change
   const jobs = []
   for (const row of rows) {
-    const jobNum = String(row[0] || '').trim()
-    if (!jobNum || jobNum === 'Job  Number' || jobNum === 'Actual') continue
+    const jobNum = String(row[0] || '').trim().replace(/\s+/g, ' ')
+    if (!jobNum || !/^\d/.test(jobNum)) continue
     jobs.push({
       job_number: jobNum,
       job_type: String(row[1] || '').trim(),

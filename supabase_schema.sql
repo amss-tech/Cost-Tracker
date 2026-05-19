@@ -75,6 +75,28 @@ create table if not exists uncommitted_costs (
   created_at timestamptz default now()
 );
 
+-- CHANGE ORDERS
+create table if not exists change_orders (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid references jobs(id) on delete cascade,
+  co_number text,
+  description text not null,
+  revenue_amount numeric(12,2) default 0,
+  cost_amount numeric(12,2) default 0,
+  status text default 'Pending',
+  date_submitted date,
+  date_approved date,
+  notes text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create trigger co_updated_at before update on change_orders
+  for each row execute function update_updated_at();
+
+alter table change_orders enable row level security;
+create policy "auth_all_cos" on change_orders for all to authenticated using (true) with check (true);
+
 -- WIP IMPORTS (audit log)
 create table if not exists wip_imports (
   id uuid primary key default gen_random_uuid(),
