@@ -123,9 +123,10 @@ export default function JobDetail() {
     navigate('/jobs')
   }
 
-  const DEFAULT_TIME_FORM = { id: null, work_date: '', employee: '', hours: '', earn_code: 'REG', cost_code: '', time_in: '', time_out: '', notes: '' }
+  const DEFAULT_TIME_FORM = { id: null, work_date: '', employee: '', hours: '', earn_code: 'REG', cost_code: '', time_in: '', time_out: '', notes: '', rate: '50' }
 
   async function saveTimeEntry() {
+    const rate = parseFloat(timeForm.rate) || null
     const payload = {
       job_id: id,
       work_date: timeForm.work_date,
@@ -136,13 +137,29 @@ export default function JobDetail() {
       time_in: timeForm.earn_code === 'WKEN2' ? (timeForm.time_in.trim() || null) : null,
       time_out: timeForm.earn_code === 'WKEN2' ? (timeForm.time_out.trim() || null) : null,
       notes: timeForm.notes.trim() || null,
+      rate,
     }
     if (timeForm.id) {
       const { data } = await supabase.from('time_entries').update(payload).eq('id', timeForm.id).select().single()
       if (data) setTimeEntries(prev => prev.map(e => e.id === timeForm.id ? data : e))
     } else {
       const { data } = await supabase.from('time_entries').insert(payload).select().single()
-      if (data) setTimeEntries(prev => [...prev, data].sort((a, b) => a.work_date.localeCompare(b.work_date)))
+      if (data) {
+        setTimeEntries(prev => [...prev, data].sort((a, b) => a.work_date.localeCompare(b.work_date)))
+        if (rate > 0) {
+          const hrs = parseFloat(timeForm.hours)
+          await supabase.from('uncommitted_costs').insert({
+            job_id: id,
+            cost_date: timeForm.work_date,
+            category: 'Labor — Hours × Rate',
+            description: `${timeForm.earn_code} labor — ${timeForm.work_date} (${timeForm.employee.trim()})`,
+            hours: hrs,
+            rate,
+            amount: parseFloat((hrs * rate).toFixed(2)),
+            posted: true,
+          })
+        }
+      }
     }
     setTimeForm(null)
   }
@@ -727,6 +744,13 @@ export default function JobDetail() {
                     <label>Cost Code</label>
                     <input type="text" value={timeForm.cost_code} onChange={e => setTimeForm(f => ({ ...f, cost_code: e.target.value }))} placeholder="e.g. 3100SI - Card Access" />
                   </div>
+                  <div className="form-group">
+                    <label>Rate ($/hr)</label>
+                    <input type="number" step="0.01" min="0" placeholder="e.g. 50.00" value={timeForm.rate} onChange={e => setTimeForm(f => ({ ...f, rate: e.target.value }))} />
+                    {parseFloat(timeForm.hours) > 0 && parseFloat(timeForm.rate) > 0 && (
+                      <small style={{ color: 'var(--color-text-3)' }}>= {fmt.currency(parseFloat(timeForm.hours) * parseFloat(timeForm.rate))}</small>
+                    )}
+                  </div>
                   {timeForm.earn_code === 'WKEN2' && (
                     <>
                       <div className="form-group">
@@ -769,11 +793,11 @@ export default function JobDetail() {
                   <table>
                     <thead><tr>
                       <th>Date</th><th>Employee</th><th className="text-right">Hours</th>
-                      <th>Earn Code</th><th>Cost Code</th><th>Time In</th><th>Time Out</th><th>Status</th><th></th>
+                      <th>Earn Code</th><th>Cost Code</th><th className="text-right">Rate</th><th className="text-right">Cost</th><th>Time In</th><th>Time Out</th><th>Status</th><th></th>
                     </tr></thead>
                     <tbody>
                       {timeEntries.map(e => (
-                        <tr key={e.id} className="clickable" onClick={() => setTimeForm({ ...e, hours: String(e.hours) })}>
+                        <tr key={e.id} className="clickable" onClick={() => setTimeForm({ ...e, hours: String(e.hours), rate: e.rate != null ? String(e.rate) : '' })}>
                           <td style={{ fontSize: 12 }}>{fmt.date(e.work_date)}</td>
                           <td>{e.employee}</td>
                           <td className="text-right fw-500">{e.hours}</td>
@@ -783,11 +807,13 @@ export default function JobDetail() {
                             </span>
                           </td>
                           <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{e.cost_code || '—'}</td>
+                          <td className="text-right" style={{ fontSize: 12 }}>{e.rate > 0 ? fmt.currency(e.rate) : '—'}</td>
+                          <td className="text-right fw-500">{e.rate > 0 ? fmt.currency(e.hours * e.rate) : '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{e.time_in || '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{e.time_out || '—'}</td>
                           <td><span className={`badge ${e.status === 'Approved' ? 'badge-green' : 'badge-amber'}`}>{e.status}</span></td>
                           <td>
-                            <button className="btn btn-sm" onClick={() => setTimeForm({ ...e, hours: String(e.hours) })}>
+                            <button className="btn btn-sm" onClick={() => setTimeForm({ ...e, hours: String(e.hours), rate: e.rate != null ? String(e.rate) : '' })}>
                               <Pencil size={11} />
                             </button>
                           </td>
@@ -796,7 +822,7 @@ export default function JobDetail() {
                       <tr style={{ background: 'var(--color-sidebar)', fontWeight: 500 }}>
                         <td colSpan={2} style={{ textAlign: 'right', fontSize: 12, color: 'var(--color-text-2)' }}>Total</td>
                         <td className="text-right fw-500">{totalTimeHours.toFixed(1)}</td>
-                        <td colSpan={6} />
+                        <td colSpan={8} />
                       </tr>
                     </tbody>
                   </table>

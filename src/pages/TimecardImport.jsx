@@ -126,6 +126,7 @@ export default function TimecardImport() {
       time_out: e.time_out,
       week_period: weekPeriod,
       status: e.status,
+      rate: rateMap[e.earn_code] > 0 ? rateMap[e.earn_code] : null,
     }))
 
     const overheadBatch = preview.overheadEntries.map(e => ({
@@ -137,6 +138,7 @@ export default function TimecardImport() {
       job_name: e.job_name,
       week_period: weekPeriod,
       status: e.status,
+      rate: rateMap[e.earn_code] > 0 ? rateMap[e.earn_code] : null,
     }))
 
     // Build posted labor cost records per job per earn code (only when that earn code's rate is set)
