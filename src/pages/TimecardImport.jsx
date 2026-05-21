@@ -4,6 +4,8 @@ import { Clock } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 const PROJECT_CODES = new Set(['REG', 'WKEN2', 'REGPM'])
+// Internal overhead jobs — routed to overhead_time_entries even when earn code is a project code
+const OVERHEAD_JOB_NUMBERS = new Set(['8'])
 
 function parseWeekPeriod(filename) {
   const match = filename.match(/(\d{8})/)
@@ -95,7 +97,7 @@ export default function TimecardImport() {
 
     const projectEntries = [], overheadEntries = [], unmatchedEntries = []
     for (const e of parsed) {
-      if (PROJECT_CODES.has(e.earn_code)) {
+      if (PROJECT_CODES.has(e.earn_code) && !OVERHEAD_JOB_NUMBERS.has(e.job_number)) {
         const job = jobMap[e.job_number]
         if (job) projectEntries.push({ ...e, job_id: job.id, job_description: job.job_description })
         else unmatchedEntries.push(e)
@@ -222,7 +224,7 @@ export default function TimecardImport() {
               <div className="metric-card" style={{ flex: 1, minWidth: 140 }}>
                 <div className="metric-label">Overhead Entries</div>
                 <div className="metric-value" style={{ fontSize: 22 }}>{preview.overheadEntries.length}</div>
-                <div className="metric-sub">TRAIN / VAC</div>
+                <div className="metric-sub">TRAIN / VAC / Bldg Renov</div>
               </div>
               {preview.unmatchedEntries.length > 0 && (
                 <div className="metric-card" style={{ flex: 1, minWidth: 140 }}>

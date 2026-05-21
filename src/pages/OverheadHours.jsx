@@ -32,6 +32,7 @@ export default function OverheadHours() {
   const totalHours = filtered.reduce((s, e) => s + (e.hours || 0), 0)
   const trainHours = filtered.filter(e => e.earn_code === 'TRAIN').reduce((s, e) => s + (e.hours || 0), 0)
   const vacHours = filtered.filter(e => e.earn_code === 'VAC').reduce((s, e) => s + (e.hours || 0), 0)
+  const bldgHours = filtered.filter(e => e.job_name?.split(' - ')[0]?.trim() === '8').reduce((s, e) => s + (e.hours || 0), 0)
 
   function handleCSV() {
     const headers = ['Date', 'Employee', 'Job / Activity', 'Earn Code', 'Cost Code', 'Hours', 'Week Period', 'Status']
@@ -52,7 +53,7 @@ export default function OverheadHours() {
       </div>
 
       <div className="page">
-        <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
+        <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
           <div className="metric-card">
             <div className="metric-label">Total Hours (filtered)</div>
             <div className="metric-value">{totalHours.toFixed(1)}</div>
@@ -64,6 +65,10 @@ export default function OverheadHours() {
           <div className="metric-card">
             <div className="metric-label">Vacation (VAC)</div>
             <div className="metric-value">{vacHours.toFixed(1)}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Building Renovation (8)</div>
+            <div className="metric-value">{bldgHours.toFixed(1)}</div>
           </div>
         </div>
 
