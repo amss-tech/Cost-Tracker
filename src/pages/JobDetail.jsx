@@ -773,7 +773,7 @@ export default function JobDetail() {
                     </tr></thead>
                     <tbody>
                       {timeEntries.map(e => (
-                        <tr key={e.id}>
+                        <tr key={e.id} className="clickable" onClick={() => setTimeForm({ ...e, hours: String(e.hours) })}>
                           <td style={{ fontSize: 12 }}>{fmt.date(e.work_date)}</td>
                           <td>{e.employee}</td>
                           <td className="text-right fw-500">{e.hours}</td>

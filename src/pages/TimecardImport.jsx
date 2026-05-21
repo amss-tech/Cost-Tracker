@@ -67,7 +67,9 @@ function parseTimecardCSV(data) {
 export default function TimecardImport() {
   const fileRef = useRef()
   const [weekPeriod, setWeekPeriod] = useState('')
-  const [laborRate, setLaborRate] = useState('')
+  const [regRate, setRegRate] = useState('50')
+  const [wken2Rate, setWken2Rate] = useState('')
+  const [regpmRate, setRegpmRate] = useState('')
   const [parsed, setParsed] = useState(null)
   const [preview, setPreview] = useState(null)
   const [importing, setImporting] = useState(false)
@@ -137,23 +139,31 @@ export default function TimecardImport() {
       status: e.status,
     }))
 
-    // Build posted labor cost records (one per job) if a rate is provided
-    const rate = parseFloat(laborRate) || 0
-    let laborBatch = []
-    if (rate > 0) {
-      const jobHours = {}
-      preview.projectEntries.forEach(e => { jobHours[e.job_id] = (jobHours[e.job_id] || 0) + (e.hours || 0) })
-      laborBatch = Object.entries(jobHours).map(([jobId, hrs]) => ({
-        job_id: jobId,
-        cost_date: weekPeriod,
-        category: 'Labor — Hours × Rate',
-        description: `Timecard import — week of ${weekPeriod}`,
-        hours: parseFloat(hrs.toFixed(2)),
-        rate,
-        amount: parseFloat((hrs * rate).toFixed(2)),
-        posted: true,
-      }))
-    }
+    // Build posted labor cost records per job per earn code (only when that earn code's rate is set)
+    const rateMap = { REG: parseFloat(regRate) || 0, WKEN2: parseFloat(wken2Rate) || 0, REGPM: parseFloat(regpmRate) || 0 }
+    const jobEarnHours = {}
+    preview.projectEntries.forEach(e => {
+      if (!jobEarnHours[e.job_id]) jobEarnHours[e.job_id] = {}
+      jobEarnHours[e.job_id][e.earn_code] = (jobEarnHours[e.job_id][e.earn_code] || 0) + (e.hours || 0)
+    })
+    const laborBatch = []
+    Object.entries(jobEarnHours).forEach(([jobId, earnMap]) => {
+      Object.entries(earnMap).forEach(([earnCode, hrs]) => {
+        const rate = rateMap[earnCode]
+        if (rate > 0) {
+          laborBatch.push({
+            job_id: jobId,
+            cost_date: weekPeriod,
+            category: 'Labor — Hours × Rate',
+            description: `${earnCode} labor — week of ${weekPeriod}`,
+            hours: parseFloat(hrs.toFixed(2)),
+            rate,
+            amount: parseFloat((hrs * rate).toFixed(2)),
+            posted: true,
+          })
+        }
+      })
+    })
 
     const [pRes, oRes, lRes] = await Promise.all([
       projectBatch.length ? supabase.from('time_entries').insert(projectBatch) : { error: null },
@@ -173,8 +183,8 @@ export default function TimecardImport() {
       projectCount: projectBatch.length,
       overheadCount: overheadBatch.length,
       unmatched: preview.unmatchedEntries.length,
-      laborJobCount: laborBatch.length,
-      laborRate: rate,
+      laborBatchCount: laborBatch.length,
+      rateMap,
     })
     setPreview(null)
     setParsed(null)
@@ -222,11 +232,19 @@ export default function TimecardImport() {
                   {weekPeriod && <small style={{ color: 'var(--color-text-3)' }}>Auto-detected from filename</small>}
                 </div>
                 <div className="form-group">
-                  <label>Loaded Labor Rate ($/hr)</label>
-                  <input type="number" step="0.01" min="0" placeholder="e.g. 85.00" value={laborRate} onChange={e => setLaborRate(e.target.value)} />
-                  <small style={{ color: 'var(--color-text-3)' }}>If set, posts labor costs to each job as confirmed Foundation cost</small>
+                  <label>REG Rate — Technician ($/hr)</label>
+                  <input type="number" step="0.01" min="0" value={regRate} onChange={e => setRegRate(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>WKEN2 Rate — Wage Det. ($/hr)</label>
+                  <input type="number" step="0.01" min="0" placeholder="Leave blank to skip" value={wken2Rate} onChange={e => setWken2Rate(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>REGPM Rate — PM Time ($/hr)</label>
+                  <input type="number" step="0.01" min="0" placeholder="Leave blank to skip" value={regpmRate} onChange={e => setRegpmRate(e.target.value)} />
                 </div>
               </div>
+              <small style={{ color: 'var(--color-text-3)', display: 'block', marginTop: 6 }}>Rates with a value post labor costs to each job as confirmed Foundation costs. Leave blank to skip that earn code.</small>
             </div>
 
             {error && <div className="auth-error" style={{ marginBottom: 12 }}>{error}</div>}
@@ -343,9 +361,16 @@ export default function TimecardImport() {
             <div style={{ fontSize: 13, color: '#3B6D11' }}>
               {result.projectCount} project entries imported · {result.overheadCount} overhead entries logged
               {result.unmatched > 0 ? ` · ${result.unmatched} unmatched entries skipped` : ''}
-              {result.laborJobCount > 0 ? ` · Labor costs posted to ${result.laborJobCount} job${result.laborJobCount !== 1 ? 's' : ''} @ $${result.laborRate}/hr` : ''}
+              {result.laborBatchCount > 0 && (
+                <> · Labor costs posted ({
+                  [result.rateMap.REG > 0 && `REG $${result.rateMap.REG}/hr`,
+                   result.rateMap.WKEN2 > 0 && `WKEN2 $${result.rateMap.WKEN2}/hr`,
+                   result.rateMap.REGPM > 0 && `REGPM $${result.rateMap.REGPM}/hr`]
+                  .filter(Boolean).join(', ')
+                })</>
+              )}
             </div>
-            <button className="btn btn-sm" style={{ marginTop: 12 }} onClick={() => { setParsed(null); setResult(null); setWeekPeriod(''); setLaborRate('') }}>
+            <button className="btn btn-sm" style={{ marginTop: 12 }} onClick={() => { setParsed(null); setResult(null); setWeekPeriod(''); setRegRate('50'); setWken2Rate(''); setRegpmRate('') }}>
               Import another
             </button>
           </div>
