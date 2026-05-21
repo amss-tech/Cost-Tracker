@@ -13,6 +13,7 @@ export default function WIPCompare() {
   const [uncommitted, setUncommitted] = useState([])
   const [billings, setBillings] = useState([])
   const [poLineItems, setPoLineItems] = useState([])
+  const [cos, setCOs] = useState([])
   const [loading, setLoading] = useState(true)
   const [filterFlag, setFilterFlag] = useState('')
   const now = new Date()
@@ -25,13 +26,14 @@ export default function WIPCompare() {
   const [seedResult, setSeedResult] = useState(null)
 
   async function load() {
-    const [j, p, inv, uc, bil, pli] = await Promise.all([
+    const [j, p, inv, uc, bil, pli, co] = await Promise.all([
       supabase.from('jobs').select('*').order('job_number'),
-      supabase.from('purchase_orders').select('job_id, amount, date_issued'),
+      supabase.from('purchase_orders').select('job_id, id, amount, date_issued'),
       supabase.from('invoices').select('job_id, amount, po_id, date_received, foundation_status'),
       supabase.from('uncommitted_costs').select('job_id, amount, cost_date, posted'),
       supabase.from('billings').select('job_id, amount, date_submitted'),
       supabase.from('po_line_items').select('po_id, qty, price_each, invoiced, invoice_date, purchase_orders(job_id)'),
+      supabase.from('change_orders').select('job_id, revenue_amount, cost_amount, status'),
     ])
     setJobs(j.data || [])
     setPOs(p.data || [])
@@ -39,6 +41,7 @@ export default function WIPCompare() {
     setUncommitted(uc.data || [])
     setBillings(bil.data || [])
     setPoLineItems(pli.data || [])
+    setCOs(co.data || [])
     setLoading(false)
   }
 
@@ -46,15 +49,28 @@ export default function WIPCompare() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>
 
-  const posByJob = {}, ucByJob = {}, directInvByJob = {}, billedByJob = {}
-  pos.forEach(p => { posByJob[p.job_id] = (posByJob[p.job_id] || 0) + (p.amount || 0) })
+  const ucByJob = {}, billedByJob = {}, coCostByJob = {}, coRevenueByJob = {}
   uncommitted.forEach(u => { ucByJob[u.job_id] = (ucByJob[u.job_id] || 0) + (u.amount || 0) })
-  invoices.filter(inv => !inv.po_id).forEach(inv => { directInvByJob[inv.job_id] = (directInvByJob[inv.job_id] || 0) + (inv.amount || 0) })
   billings.forEach(b => { billedByJob[b.job_id] = (billedByJob[b.job_id] || 0) + (b.amount || 0) })
+  cos.filter(c => c.status === 'Approved').forEach(c => {
+    coCostByJob[c.job_id] = (coCostByJob[c.job_id] || 0) + (c.cost_amount || 0)
+    coRevenueByJob[c.job_id] = (coRevenueByJob[c.job_id] || 0) + (c.revenue_amount || 0)
+  })
+
+  // Tracked cost: uninvoiced PO balance + all invoices + uncommitted
+  const invoicedByPO = {}
+  invoices.forEach(inv => { if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0) })
+  const uninvPoByJob = {}
+  pos.forEach(p => { uninvPoByJob[p.job_id] = (uninvPoByJob[p.job_id] || 0) + Math.max(0, (p.amount || 0) - (invoicedByPO[p.id] || 0)) })
+  const allInvByJob = {}
+  invoices.forEach(inv => { allInvByJob[inv.job_id] = (allInvByJob[inv.job_id] || 0) + (inv.amount || 0) })
+  // posByJob still needed for unseeded check (has any POs at all)
+  const posByJob = {}
+  pos.forEach(p => { posByJob[p.job_id] = (posByJob[p.job_id] || 0) + (p.amount || 0) })
 
   const unseededCosts = jobs.filter(j =>
     (j.jtd_cost || 0) > 0 &&
-    !posByJob[j.id] && !ucByJob[j.id] && !directInvByJob[j.id]
+    !posByJob[j.id] && !ucByJob[j.id] && !(allInvByJob[j.id])
   )
   const unseededBillings = jobs.filter(j =>
     (j.jtd_billing || 0) > 0 && !billedByJob[j.id]
@@ -108,15 +124,16 @@ export default function WIPCompare() {
   }
 
   const rows = jobs.map(j => {
-    const tracked = (posByJob[j.id] || 0) + (directInvByJob[j.id] || 0) + (ucByJob[j.id] || 0)
-    const variance = (j.estimated_cost || 0) - tracked
-    const variancePct = j.estimated_cost > 0 ? variance / j.estimated_cost : 0
+    const tracked = (uninvPoByJob[j.id] || 0) + (allInvByJob[j.id] || 0) + (ucByJob[j.id] || 0)
+    const revisedCost = (j.estimated_cost || 0) + (coCostByJob[j.id] || 0)
+    const variance = revisedCost - tracked
+    const variancePct = revisedCost > 0 ? variance / revisedCost : 0
     const billedToDate = billedByJob[j.id] || 0
     const openCommit = openCommitByJob[j.id] || 0
-    const leftToBill = (j.estimated_revenue || 0) - billedToDate
-    const estGM = gmPct(j.estimated_revenue, j.estimated_cost)
-    // Same formula as Job Detail: GM% using estimated revenue vs actual tracked costs
-    const actualGM = (j.estimated_revenue > 0 && tracked > 0) ? gmPct(j.estimated_revenue, tracked) : null
+    const revisedRevenue = (j.estimated_revenue || 0) + (coRevenueByJob[j.id] || 0)
+    const leftToBill = revisedRevenue - billedToDate
+    const estGM = gmPct(revisedRevenue, revisedCost)
+    const actualGM = (revisedRevenue > 0 && tracked > 0) ? gmPct(revisedRevenue, tracked) : null
     let flag = 'No data'
     if (estGM != null && actualGM != null) {
       flag = actualGM < estGM ? 'Over' : 'On Track'
@@ -125,14 +142,14 @@ export default function WIPCompare() {
     } else if (tracked > 0) {
       flag = 'Watch'
     }
-    return { ...j, tracked, variance, variancePct, flag, billedToDate, openCommit, leftToBill, estGM, actualGM }
+    return { ...j, tracked, variance, variancePct, flag, billedToDate, openCommit, leftToBill, estGM, actualGM, revisedCost, revisedRevenue }
   })
 
   const filtered = filterFlag ? rows.filter(r => r.flag === filterFlag) : rows
 
   // Portfolio totals
-  const totalRevenue = rows.reduce((s, r) => s + (r.estimated_revenue || 0), 0)
-  const totalEstCost = rows.reduce((s, r) => s + (r.estimated_cost || 0), 0)
+  const totalRevenue = rows.reduce((s, r) => s + (r.revisedRevenue || 0), 0)
+  const totalEstCost = rows.reduce((s, r) => s + (r.revisedCost || 0), 0)
   const totalVariance = rows.reduce((s, r) => s + r.variance, 0)
   const totalBilled = rows.reduce((s, r) => s + r.billedToDate, 0)
   const totalTracked = rows.reduce((s, r) => s + r.tracked, 0)
@@ -177,7 +194,7 @@ export default function WIPCompare() {
       'Open Commits', 'Variance $', 'Variance %', 'Est GM%', 'Actual GM%', 'Billed to Date', 'Left to Bill', 'Flag']
     const csvRows = rows.map(r => [
       r.job_number, `"${r.job_description}"`, r.project_manager,
-      r.estimated_revenue || '', r.estimated_cost, r.tracked.toFixed(2),
+      r.revisedRevenue || '', r.revisedCost, r.tracked.toFixed(2),
       r.openCommit.toFixed(2), r.variance.toFixed(2), (r.variancePct * 100).toFixed(1) + '%',
       r.estGM != null ? (r.estGM * 100).toFixed(1) + '%' : '',
       r.actualGM != null ? (r.actualGM * 100).toFixed(1) + '%' : '',
@@ -327,10 +344,10 @@ export default function WIPCompare() {
                       <td className="fw-500">{r.job_number}</td>
                       <td>{r.job_description}</td>
                       <td>{r.project_manager}</td>
-                      <td className="text-right" style={{ color: !r.estimated_revenue ? 'var(--color-warning)' : 'inherit' }}>
-                        {r.estimated_revenue ? fmt.currency(r.estimated_revenue) : <span style={{ fontSize: 11 }}>missing</span>}
+                      <td className="text-right" style={{ color: !r.revisedRevenue ? 'var(--color-warning)' : 'inherit' }}>
+                        {r.revisedRevenue ? fmt.currency(r.revisedRevenue) : <span style={{ fontSize: 11 }}>missing</span>}
                       </td>
-                      <td className="text-right">{fmt.currency(r.estimated_cost)}</td>
+                      <td className="text-right">{fmt.currency(r.revisedCost)}</td>
                       <td className="text-right">{r.tracked > 0 ? fmt.currency(r.tracked) : <span className="text-muted">—</span>}</td>
                       <td className="text-right" style={{ color: r.openCommit > 0 ? 'var(--color-warning)' : 'inherit' }}>
                         {r.openCommit > 0 ? fmt.currency(r.openCommit) : <span className="text-muted">—</span>}

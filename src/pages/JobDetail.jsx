@@ -54,11 +54,19 @@ export default function JobDetail() {
   if (loading) return <div className="loading-center"><div className="spinner" /></div>
   if (!job) return <div className="page"><p>Job not found.</p></div>
 
-  // Tracked cost
-  const trackedPOs = pos.reduce((s, p) => s + (p.amount || 0), 0)
+  // Build invoicedByPO first — used for both the tracked cost formula and PO badge display
+  const invoicedByPO = {}
+  invoices.forEach(inv => { if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0) })
+
+  // Tracked cost formula: uninvoiced PO balance + all invoices + uncommitted
+  // Using uninvoiced balance prevents double-counting when invoice > PO amount and correctly
+  // captures overages when an invoice exceeds its PO.
+  const trackedPOs = pos.reduce((s, p) => s + (p.amount || 0), 0)  // total PO commitment (for display)
+  const uninvoicedPOBalance = pos.reduce((s, p) => s + Math.max(0, (p.amount || 0) - (invoicedByPO[p.id] || 0)), 0)
   const trackedUC = uncommitted.reduce((s, u) => s + (u.amount || 0), 0)
+  const trackedAllInv = invoices.reduce((s, inv) => s + (inv.amount || 0), 0)
   const trackedDirectInv = invoices.filter(inv => !inv.po_id).reduce((s, inv) => s + (inv.amount || 0), 0)
-  const trackedTotal = trackedPOs + trackedDirectInv + trackedUC
+  const trackedTotal = uninvoicedPOBalance + trackedAllInv + trackedUC
 
   // Approved change orders
   const approvedCOs = cos.filter(c => c.status === 'Approved')
@@ -75,9 +83,6 @@ export default function JobDetail() {
 
   const totalBilled = billings.reduce((s, b) => s + (b.amount || 0), 0)
   const leftToBill = revisedRevenue - totalBilled
-
-  const invoicedByPO = {}
-  invoices.forEach(inv => { if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0) })
 
   async function togglePosted(ucId, current) {
     setUncommitted(prev => prev.map(u => u.id === ucId ? { ...u, posted: !current } : u))

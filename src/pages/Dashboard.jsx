@@ -57,15 +57,20 @@ export default function Dashboard() {
   const postedLabor = uncommitted.filter(u => u.category === 'Labor — Hours × Rate' && u.posted).reduce((s, u) => s + (u.amount || 0), 0)
 
   // Build per-job aggregates for risk table
-  const posByJob = {}, ucByJob = {}, directInvByJob = {}, billedByJob = {}, coRevenueByJob = {}, coCostByJob = {}
-  pos.forEach(p => { posByJob[p.job_id] = (posByJob[p.job_id] || 0) + (p.amount || 0) })
+  const ucByJob = {}, billedByJob = {}, coRevenueByJob = {}, coCostByJob = {}
   uncommitted.forEach(u => { ucByJob[u.job_id] = (ucByJob[u.job_id] || 0) + (u.amount || 0) })
-  invoices.filter(inv => !inv.po_id).forEach(inv => { directInvByJob[inv.job_id] = (directInvByJob[inv.job_id] || 0) + (inv.amount || 0) })
   billings.forEach(b => { billedByJob[b.job_id] = (billedByJob[b.job_id] || 0) + (b.amount || 0) })
   cos.filter(c => c.status === 'Approved').forEach(c => {
     coRevenueByJob[c.job_id] = (coRevenueByJob[c.job_id] || 0) + (c.revenue_amount || 0)
     coCostByJob[c.job_id] = (coCostByJob[c.job_id] || 0) + (c.cost_amount || 0)
   })
+
+  // Tracked cost: uninvoiced PO balance + all invoices + uncommitted
+  // invoicedByPO is already built above for the dashboard uninvoiced metric
+  const uninvPoByJob = {}
+  pos.forEach(p => { uninvPoByJob[p.job_id] = (uninvPoByJob[p.job_id] || 0) + Math.max(0, (p.amount || 0) - (invoicedByPO[p.id] || 0)) })
+  const allInvByJob = {}
+  invoices.forEach(inv => { allInvByJob[inv.job_id] = (allInvByJob[inv.job_id] || 0) + (inv.amount || 0) })
 
   const totalContract = jobs.reduce((s, j) => s + (j.estimated_revenue || 0) + (coRevenueByJob[j.id] || 0), 0)
 
@@ -73,7 +78,7 @@ export default function Dashboard() {
   const totalLeftToBill = totalContract - totalBilledAllJobs
 
   const jobsWithVariance = jobs.map(j => {
-    const tracked = (posByJob[j.id] || 0) + (directInvByJob[j.id] || 0) + (ucByJob[j.id] || 0)
+    const tracked = (uninvPoByJob[j.id] || 0) + (allInvByJob[j.id] || 0) + (ucByJob[j.id] || 0)
     const revisedRevenue = (j.estimated_revenue || 0) + (coRevenueByJob[j.id] || 0)
     const revisedCost = (j.estimated_cost || 0) + (coCostByJob[j.id] || 0)
     const variance = revisedCost - tracked

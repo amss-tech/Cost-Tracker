@@ -64,7 +64,14 @@ export function trackingUrl(num) {
 }
 
 export function calcTrackedCost(pos, invoices, uncommitted) {
-  const poTotal = (pos || []).reduce((s, p) => s + (p.amount || 0), 0)
-  const unTotal = (uncommitted || []).reduce((s, u) => s + (u.amount || 0), 0)
-  return poTotal + unTotal
+  const invoicedByPO = {}
+  ;(invoices || []).forEach(inv => {
+    if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0)
+  })
+  // Uninvoiced PO balance: PO commitment minus amounts already invoiced against it
+  const poBalance = (pos || []).reduce((s, p) => s + Math.max(0, (p.amount || 0) - (invoicedByPO[p.id] || 0)), 0)
+  // All invoices (PO-linked + direct)
+  const invTotal = (invoices || []).reduce((s, inv) => s + (inv.amount || 0), 0)
+  const ucTotal = (uncommitted || []).reduce((s, u) => s + (u.amount || 0), 0)
+  return poBalance + invTotal + ucTotal
 }
