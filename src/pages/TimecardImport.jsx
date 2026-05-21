@@ -67,6 +67,7 @@ function parseTimecardCSV(data) {
 export default function TimecardImport() {
   const fileRef = useRef()
   const [weekPeriod, setWeekPeriod] = useState('')
+  const [laborRate, setLaborRate] = useState('')
   const [parsed, setParsed] = useState(null)
   const [preview, setPreview] = useState(null)
   const [importing, setImporting] = useState(false)
@@ -136,14 +137,33 @@ export default function TimecardImport() {
       status: e.status,
     }))
 
-    const [pRes, oRes] = await Promise.all([
+    // Build posted labor cost records (one per job) if a rate is provided
+    const rate = parseFloat(laborRate) || 0
+    let laborBatch = []
+    if (rate > 0) {
+      const jobHours = {}
+      preview.projectEntries.forEach(e => { jobHours[e.job_id] = (jobHours[e.job_id] || 0) + (e.hours || 0) })
+      laborBatch = Object.entries(jobHours).map(([jobId, hrs]) => ({
+        job_id: jobId,
+        cost_date: weekPeriod,
+        category: 'Labor — Hours × Rate',
+        description: `Timecard import — week of ${weekPeriod}`,
+        hours: parseFloat(hrs.toFixed(2)),
+        rate,
+        amount: parseFloat((hrs * rate).toFixed(2)),
+        posted: true,
+      }))
+    }
+
+    const [pRes, oRes, lRes] = await Promise.all([
       projectBatch.length ? supabase.from('time_entries').insert(projectBatch) : { error: null },
       overheadBatch.length ? supabase.from('overhead_time_entries').insert(overheadBatch) : { error: null },
+      laborBatch.length ? supabase.from('uncommitted_costs').insert(laborBatch) : { error: null },
     ])
 
-    if (pRes.error || oRes.error) {
-      const msg = pRes.error?.message || oRes.error?.message || 'Unknown error'
-      const detail = pRes.error?.details || oRes.error?.details || ''
+    if (pRes.error || oRes.error || lRes.error) {
+      const msg = pRes.error?.message || oRes.error?.message || lRes.error?.message || 'Unknown error'
+      const detail = pRes.error?.details || oRes.error?.details || lRes.error?.details || ''
       setError(`Import failed: ${msg}${detail ? ` — ${detail}` : ''}`)
       setImporting(false)
       return
@@ -153,6 +173,8 @@ export default function TimecardImport() {
       projectCount: projectBatch.length,
       overheadCount: overheadBatch.length,
       unmatched: preview.unmatchedEntries.length,
+      laborJobCount: laborBatch.length,
+      laborRate: rate,
     })
     setPreview(null)
     setParsed(null)
@@ -198,6 +220,11 @@ export default function TimecardImport() {
                   <label>Week Start Date *</label>
                   <input type="date" value={weekPeriod} onChange={e => setWeekPeriod(e.target.value)} />
                   {weekPeriod && <small style={{ color: 'var(--color-text-3)' }}>Auto-detected from filename</small>}
+                </div>
+                <div className="form-group">
+                  <label>Loaded Labor Rate ($/hr)</label>
+                  <input type="number" step="0.01" min="0" placeholder="e.g. 85.00" value={laborRate} onChange={e => setLaborRate(e.target.value)} />
+                  <small style={{ color: 'var(--color-text-3)' }}>If set, posts labor costs to each job as confirmed Foundation cost</small>
                 </div>
               </div>
             </div>
@@ -316,8 +343,9 @@ export default function TimecardImport() {
             <div style={{ fontSize: 13, color: '#3B6D11' }}>
               {result.projectCount} project entries imported · {result.overheadCount} overhead entries logged
               {result.unmatched > 0 ? ` · ${result.unmatched} unmatched entries skipped` : ''}
+              {result.laborJobCount > 0 ? ` · Labor costs posted to ${result.laborJobCount} job${result.laborJobCount !== 1 ? 's' : ''} @ $${result.laborRate}/hr` : ''}
             </div>
-            <button className="btn btn-sm" style={{ marginTop: 12 }} onClick={() => { setParsed(null); setResult(null); setWeekPeriod('') }}>
+            <button className="btn btn-sm" style={{ marginTop: 12 }} onClick={() => { setParsed(null); setResult(null); setWeekPeriod(''); setLaborRate('') }}>
               Import another
             </button>
           </div>

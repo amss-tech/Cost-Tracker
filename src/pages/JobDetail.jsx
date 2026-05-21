@@ -266,6 +266,8 @@ export default function JobDetail() {
         </div>
       </div>
 
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+
       {confirmComplete && (
         <div style={{ background: 'var(--color-sidebar)', border: '1px solid var(--color-border)', borderRadius: 8, padding: '14px 20px', margin: '0 20px 0' }}>
           <div style={{ fontWeight: 600, marginBottom: 10 }}>Mark this job as complete?</div>
@@ -919,6 +921,8 @@ export default function JobDetail() {
           }
         </div>
       )}
+
+      </div>
     </>
   )
 }
