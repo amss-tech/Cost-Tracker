@@ -18,6 +18,8 @@ import Reports from './pages/Reports'
 import Forecast from './pages/BillingForecast'
 import TimecardImport from './pages/TimecardImport'
 import OverheadHours from './pages/OverheadHours'
+import BOMImport from './pages/BOMImport'
+import FieldReport from './pages/FieldReport'
 
 function PrivateRoute({ session, children }) {
   if (!session) return <Navigate to="/login" replace />
@@ -43,6 +45,11 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={session ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/field-report" element={
+          <PrivateRoute session={session}>
+            <FieldReport />
+          </PrivateRoute>
+        } />
         <Route path="/*" element={
           <PrivateRoute session={session}>
             <Shell session={session}>
@@ -62,6 +69,7 @@ export default function App() {
                 <Route path="/forecast" element={<Forecast />} />
                 <Route path="/timecard-import" element={<TimecardImport />} />
                 <Route path="/overhead-hours" element={<OverheadHours />} />
+                <Route path="/bom-import" element={<BOMImport />} />
               </Routes>
             </Shell>
           </PrivateRoute>

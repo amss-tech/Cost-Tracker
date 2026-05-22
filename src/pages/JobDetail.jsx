@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
-import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock } from 'lucide-react'
+import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList } from 'lucide-react'
 
 export default function JobDetail() {
   const { id } = useParams()
@@ -17,6 +17,7 @@ export default function JobDetail() {
   const [expandedPOs, setExpandedPOs] = useState(new Set())
   const [loading, setLoading] = useState(true)
   const [timeEntries, setTimeEntries] = useState([])
+  const [dailyReports, setDailyReports] = useState([])
   const [timeForm, setTimeForm] = useState(null)
   const [documents, setDocuments] = useState([])
   const [docForm, setDocForm] = useState({ label: '', url: '' })
@@ -28,7 +29,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -37,6 +38,7 @@ export default function JobDetail() {
         supabase.from('billings').select('*').eq('job_id', id).order('date_submitted'),
         supabase.from('time_entries').select('*').eq('job_id', id).order('work_date'),
         supabase.from('job_documents').select('*').eq('job_id', id).order('created_at'),
+        supabase.from('daily_reports').select('*').eq('job_id', id).order('report_date', { ascending: false }),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -46,6 +48,7 @@ export default function JobDetail() {
       setBillings(bil.data || [])
       setTimeEntries(te.data || [])
       setDocuments(docs.data || [])
+      setDailyReports(dr.data || [])
       setLoading(false)
     }
     load()
@@ -424,12 +427,18 @@ export default function JobDetail() {
         <button className={`tab ${activeTab==='docs'?'active':''}`} onClick={() => setActiveTab('docs')}>
           <Link size={12} style={{ marginRight: 4 }} />Documents {documents.length > 0 ? `(${documents.length})` : ''}
         </button>
+        <button className={`tab ${activeTab==='reports'?'active':''}`} onClick={() => setActiveTab('reports')}>
+          <ClipboardList size={12} style={{ marginRight: 4 }} />Daily Reports {dailyReports.length > 0 ? `(${dailyReports.length})` : ''}
+        </button>
       </div>
 
       {/* POs */}
       {activeTab === 'pos' && (
         <div className="tab-content">
-          <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap: 8, marginBottom:12 }}>
+            <button className="btn" onClick={() => navigate(`/bom-import?job=${id}`)}>
+              <Upload size={14} /> Import BOM
+            </button>
             <button className="btn btn-primary" onClick={() => navigate(`/po-entry?job=${id}`)}>
               <Plus size={14} /> Add PO
             </button>
@@ -941,6 +950,54 @@ export default function JobDetail() {
                       <td className="text-right fw-500">{fmt.currency(totalBilled)}</td>
                       <td colSpan={2} />
                     </tr>
+                  </tbody>
+                </table>
+              </div></div>
+          }
+        </div>
+      )}
+
+      {/* Daily Reports */}
+      {activeTab === 'reports' && (
+        <div className="tab-content">
+          <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+            <button className="btn btn-primary" onClick={() => window.open('/field-report', '_blank')}>
+              <Plus size={14} /> New Report
+            </button>
+          </div>
+          {dailyReports.length === 0
+            ? <div className="empty-state"><p>No daily reports yet. Technicians submit reports at <strong>/field-report</strong>.</p></div>
+            : <div className="card"><div className="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th>Date</th><th>Employee</th>
+                    <th className="text-right">Hours</th>
+                    <th className="text-right">Crew</th>
+                    <th>Work Summary</th>
+                    <th>Submitted</th>
+                  </tr></thead>
+                  <tbody>
+                    {dailyReports.map(r => {
+                      let hours = '—'
+                      if (r.start_time && r.end_time) {
+                        const [sh, sm] = r.start_time.split(':').map(Number)
+                        const [eh, em] = r.end_time.split(':').map(Number)
+                        const mins = (eh * 60 + em) - (sh * 60 + sm)
+                        if (mins > 0) hours = (mins / 60).toFixed(1)
+                      }
+                      return (
+                        <tr key={r.id}>
+                          <td style={{ fontSize:12, whiteSpace:'nowrap' }}>{fmt.date(r.report_date)}</td>
+                          <td>{r.employee}</td>
+                          <td className="text-right">{hours}</td>
+                          <td className="text-right">{r.crew_size ?? '—'}</td>
+                          <td style={{ maxWidth:360, fontSize:13 }}>{r.work_summary}</td>
+                          <td style={{ fontSize:11, color:'var(--color-text-3)', whiteSpace:'nowrap' }}>
+                            {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div></div>
