@@ -1,0 +1,27 @@
+# Caddy reverse proxy config for Tusco ES self-hosted Supabase
+#
+# Install Caddy on the droplet, then copy this to /etc/caddy/Caddyfile
+# and run: systemctl reload caddy
+#
+# Caddy automatically provisions and renews Let's Encrypt SSL certificates.
+# The domain below must already point to this droplet's IP via an A record.
+#
+# Replace api.tusco-es.com with your actual subdomain.
+
+api.tusco-es.com {
+    # Forward all traffic to the Supabase Kong API gateway
+    reverse_proxy localhost:8000 {
+        # Pass real client IP through to Supabase
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Optional: restrict Supabase Studio to your office IP
+    # Uncomment and set your IP to prevent public access to the admin UI
+    # @studio {
+    #     path /studio*
+    #     not remote_ip YOUR.OFFICE.IP.ADDRESS
+    # }
+    # respond @studio 403
+}
