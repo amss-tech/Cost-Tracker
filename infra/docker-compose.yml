@@ -1,0 +1,125 @@
+# Tusco ES — Self-Hosted Backend Stack
+#
+# 4 containers replacing Supabase Cloud:
+#   postgres:15       — Postgres (the actual database)
+#   postgrest         — REST API layer (handles supabase.from() calls)
+#   gotrue            — JWT auth layer (handles supabase.auth.* calls)
+#   caddy             — Reverse proxy + auto-SSL
+#
+# Usage:
+#   cp .env.example .env && nano .env   # fill in your values
+#   docker compose up -d
+#
+# The Supabase JS client in both apps works unchanged — only the
+# VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY env vars change.
+
+version: '3.8'
+
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL 15 — the database
+  # --------------------------------------------------------------------------
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # --------------------------------------------------------------------------
+  # PostgREST — auto-generated REST API from the Postgres schema
+  # Routes: /rest/v1/* (via Caddy)
+  # --------------------------------------------------------------------------
+  rest:
+    image: postgrest/postgrest:v12.2.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Connect as postgres superuser so it can switch roles via SET LOCAL ROLE
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
+      # Expose both app schemas — Cost-Tracker (public) and Esticomms (esticomms)
+      PGRST_DB_SCHEMAS: public,esticomms
+      # Role for unauthenticated requests (no valid JWT)
+      PGRST_DB_ANON_ROLE: anon
+      # Must match GOTRUE_JWT_SECRET so PostgREST can verify GoTrue-issued tokens
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_POOL: 10
+      PGRST_LOG_LEVEL: warn
+
+  # --------------------------------------------------------------------------
+  # GoTrue — JWT auth service
+  # Routes: /auth/v1/* (via Caddy)
+  # --------------------------------------------------------------------------
+  auth:
+    image: supabase/gotrue:v2.151.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+
+      # Database connection — GoTrue auto-creates the auth schema on startup
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
+
+      # JWT — must match PGRST_JWT_SECRET so PostgREST can verify GoTrue tokens
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+
+      # Site config — used for CORS and redirect validation
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${ALLOWED_ORIGINS}
+      API_EXTERNAL_URL: https://${DOMAIN}
+
+      # Skip email verification — internal tool, users are created by admin
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_DISABLE_SIGNUP: "false"
+
+      # Optional: SMTP for password reset emails (leave blank to disable)
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-Tusco ES}
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: https://${DOMAIN}/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: https://${DOMAIN}/auth/v1/verify
+
+  # --------------------------------------------------------------------------
+  # Caddy — reverse proxy + automatic Let's Encrypt SSL
+  # --------------------------------------------------------------------------
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - rest
+      - auth
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
