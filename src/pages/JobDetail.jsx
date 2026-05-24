@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
-import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock } from 'lucide-react'
+import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList } from 'lucide-react'
 
 export default function JobDetail() {
   const { id } = useParams()
@@ -17,6 +17,7 @@ export default function JobDetail() {
   const [expandedPOs, setExpandedPOs] = useState(new Set())
   const [loading, setLoading] = useState(true)
   const [timeEntries, setTimeEntries] = useState([])
+  const [dailyReports, setDailyReports] = useState([])
   const [timeForm, setTimeForm] = useState(null)
   const [documents, setDocuments] = useState([])
   const [docForm, setDocForm] = useState({ label: '', url: '' })
@@ -28,7 +29,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -37,6 +38,7 @@ export default function JobDetail() {
         supabase.from('billings').select('*').eq('job_id', id).order('date_submitted'),
         supabase.from('time_entries').select('*').eq('job_id', id).order('work_date'),
         supabase.from('job_documents').select('*').eq('job_id', id).order('created_at'),
+        supabase.from('daily_reports').select('*').eq('job_id', id).order('report_date', { ascending: false }),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -46,6 +48,7 @@ export default function JobDetail() {
       setBillings(bil.data || [])
       setTimeEntries(te.data || [])
       setDocuments(docs.data || [])
+      setDailyReports(dr.data || [])
       setLoading(false)
     }
     load()
@@ -54,11 +57,19 @@ export default function JobDetail() {
   if (loading) return <div className="loading-center"><div className="spinner" /></div>
   if (!job) return <div className="page"><p>Job not found.</p></div>
 
-  // Tracked cost
-  const trackedPOs = pos.reduce((s, p) => s + (p.amount || 0), 0)
+  // Build invoicedByPO first — used for both the tracked cost formula and PO badge display
+  const invoicedByPO = {}
+  invoices.forEach(inv => { if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0) })
+
+  // Tracked cost formula: uninvoiced PO balance + all invoices + uncommitted
+  // Using uninvoiced balance prevents double-counting when invoice > PO amount and correctly
+  // captures overages when an invoice exceeds its PO.
+  const trackedPOs = pos.reduce((s, p) => s + (p.amount || 0), 0)  // total PO commitment (for display)
+  const uninvoicedPOBalance = pos.reduce((s, p) => s + Math.max(0, (p.amount || 0) - (invoicedByPO[p.id] || 0)), 0)
   const trackedUC = uncommitted.reduce((s, u) => s + (u.amount || 0), 0)
+  const trackedAllInv = invoices.reduce((s, inv) => s + (inv.amount || 0), 0)
   const trackedDirectInv = invoices.filter(inv => !inv.po_id).reduce((s, inv) => s + (inv.amount || 0), 0)
-  const trackedTotal = trackedPOs + trackedDirectInv + trackedUC
+  const trackedTotal = uninvoicedPOBalance + trackedAllInv + trackedUC
 
   // Approved change orders
   const approvedCOs = cos.filter(c => c.status === 'Approved')
@@ -75,9 +86,6 @@ export default function JobDetail() {
 
   const totalBilled = billings.reduce((s, b) => s + (b.amount || 0), 0)
   const leftToBill = revisedRevenue - totalBilled
-
-  const invoicedByPO = {}
-  invoices.forEach(inv => { if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0) })
 
   async function togglePosted(ucId, current) {
     setUncommitted(prev => prev.map(u => u.id === ucId ? { ...u, posted: !current } : u))
@@ -118,9 +126,10 @@ export default function JobDetail() {
     navigate('/jobs')
   }
 
-  const DEFAULT_TIME_FORM = { id: null, work_date: '', employee: '', hours: '', earn_code: 'REG', cost_code: '', time_in: '', time_out: '', notes: '' }
+  const DEFAULT_TIME_FORM = { id: null, work_date: '', employee: '', hours: '', earn_code: 'REG', cost_code: '', time_in: '', time_out: '', notes: '', rate: '50' }
 
   async function saveTimeEntry() {
+    const rate = parseFloat(timeForm.rate) || null
     const payload = {
       job_id: id,
       work_date: timeForm.work_date,
@@ -131,13 +140,29 @@ export default function JobDetail() {
       time_in: timeForm.earn_code === 'WKEN2' ? (timeForm.time_in.trim() || null) : null,
       time_out: timeForm.earn_code === 'WKEN2' ? (timeForm.time_out.trim() || null) : null,
       notes: timeForm.notes.trim() || null,
+      rate,
     }
     if (timeForm.id) {
       const { data } = await supabase.from('time_entries').update(payload).eq('id', timeForm.id).select().single()
       if (data) setTimeEntries(prev => prev.map(e => e.id === timeForm.id ? data : e))
     } else {
       const { data } = await supabase.from('time_entries').insert(payload).select().single()
-      if (data) setTimeEntries(prev => [...prev, data].sort((a, b) => a.work_date.localeCompare(b.work_date)))
+      if (data) {
+        setTimeEntries(prev => [...prev, data].sort((a, b) => a.work_date.localeCompare(b.work_date)))
+        if (rate > 0) {
+          const hrs = parseFloat(timeForm.hours)
+          await supabase.from('uncommitted_costs').insert({
+            job_id: id,
+            cost_date: timeForm.work_date,
+            category: 'Labor — Hours × Rate',
+            description: `${timeForm.earn_code} labor — ${timeForm.work_date} (${timeForm.employee.trim()})`,
+            hours: hrs,
+            rate,
+            amount: parseFloat((hrs * rate).toFixed(2)),
+            posted: true,
+          })
+        }
+      }
     }
     setTimeForm(null)
   }
@@ -260,6 +285,8 @@ export default function JobDetail() {
           )}
         </div>
       </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
 
       {confirmComplete && (
         <div style={{ background: 'var(--color-sidebar)', border: '1px solid var(--color-border)', borderRadius: 8, padding: '14px 20px', margin: '0 20px 0' }}>
@@ -400,12 +427,18 @@ export default function JobDetail() {
         <button className={`tab ${activeTab==='docs'?'active':''}`} onClick={() => setActiveTab('docs')}>
           <Link size={12} style={{ marginRight: 4 }} />Documents {documents.length > 0 ? `(${documents.length})` : ''}
         </button>
+        <button className={`tab ${activeTab==='reports'?'active':''}`} onClick={() => setActiveTab('reports')}>
+          <ClipboardList size={12} style={{ marginRight: 4 }} />Daily Reports {dailyReports.length > 0 ? `(${dailyReports.length})` : ''}
+        </button>
       </div>
 
       {/* POs */}
       {activeTab === 'pos' && (
         <div className="tab-content">
-          <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap: 8, marginBottom:12 }}>
+            <button className="btn" onClick={() => navigate(`/bom-import?job=${id}`)}>
+              <Upload size={14} /> Import BOM
+            </button>
             <button className="btn btn-primary" onClick={() => navigate(`/po-entry?job=${id}`)}>
               <Plus size={14} /> Add PO
             </button>
@@ -720,6 +753,13 @@ export default function JobDetail() {
                     <label>Cost Code</label>
                     <input type="text" value={timeForm.cost_code} onChange={e => setTimeForm(f => ({ ...f, cost_code: e.target.value }))} placeholder="e.g. 3100SI - Card Access" />
                   </div>
+                  <div className="form-group">
+                    <label>Rate ($/hr)</label>
+                    <input type="number" step="0.01" min="0" placeholder="e.g. 50.00" value={timeForm.rate} onChange={e => setTimeForm(f => ({ ...f, rate: e.target.value }))} />
+                    {parseFloat(timeForm.hours) > 0 && parseFloat(timeForm.rate) > 0 && (
+                      <small style={{ color: 'var(--color-text-3)' }}>= {fmt.currency(parseFloat(timeForm.hours) * parseFloat(timeForm.rate))}</small>
+                    )}
+                  </div>
                   {timeForm.earn_code === 'WKEN2' && (
                     <>
                       <div className="form-group">
@@ -762,11 +802,11 @@ export default function JobDetail() {
                   <table>
                     <thead><tr>
                       <th>Date</th><th>Employee</th><th className="text-right">Hours</th>
-                      <th>Earn Code</th><th>Cost Code</th><th>Time In</th><th>Time Out</th><th>Status</th><th></th>
+                      <th>Earn Code</th><th>Cost Code</th><th className="text-right">Rate</th><th className="text-right">Cost</th><th>Time In</th><th>Time Out</th><th>Status</th><th></th>
                     </tr></thead>
                     <tbody>
                       {timeEntries.map(e => (
-                        <tr key={e.id}>
+                        <tr key={e.id} className="clickable" onClick={() => setTimeForm({ ...e, hours: String(e.hours), rate: e.rate != null ? String(e.rate) : '' })}>
                           <td style={{ fontSize: 12 }}>{fmt.date(e.work_date)}</td>
                           <td>{e.employee}</td>
                           <td className="text-right fw-500">{e.hours}</td>
@@ -776,11 +816,13 @@ export default function JobDetail() {
                             </span>
                           </td>
                           <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{e.cost_code || '—'}</td>
+                          <td className="text-right" style={{ fontSize: 12 }}>{e.rate > 0 ? fmt.currency(e.rate) : '—'}</td>
+                          <td className="text-right fw-500">{e.rate > 0 ? fmt.currency(e.hours * e.rate) : '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{e.time_in || '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{e.time_out || '—'}</td>
                           <td><span className={`badge ${e.status === 'Approved' ? 'badge-green' : 'badge-amber'}`}>{e.status}</span></td>
                           <td>
-                            <button className="btn btn-sm" onClick={() => setTimeForm({ ...e, hours: String(e.hours) })}>
+                            <button className="btn btn-sm" onClick={() => setTimeForm({ ...e, hours: String(e.hours), rate: e.rate != null ? String(e.rate) : '' })}>
                               <Pencil size={11} />
                             </button>
                           </td>
@@ -789,7 +831,7 @@ export default function JobDetail() {
                       <tr style={{ background: 'var(--color-sidebar)', fontWeight: 500 }}>
                         <td colSpan={2} style={{ textAlign: 'right', fontSize: 12, color: 'var(--color-text-2)' }}>Total</td>
                         <td className="text-right fw-500">{totalTimeHours.toFixed(1)}</td>
-                        <td colSpan={6} />
+                        <td colSpan={8} />
                       </tr>
                     </tbody>
                   </table>
@@ -914,6 +956,56 @@ export default function JobDetail() {
           }
         </div>
       )}
+
+      {/* Daily Reports */}
+      {activeTab === 'reports' && (
+        <div className="tab-content">
+          <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+            <button className="btn btn-primary" onClick={() => window.open('/field-report', '_blank')}>
+              <Plus size={14} /> New Report
+            </button>
+          </div>
+          {dailyReports.length === 0
+            ? <div className="empty-state"><p>No daily reports yet. Technicians submit reports at <strong>/field-report</strong>.</p></div>
+            : <div className="card"><div className="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th>Date</th><th>Employee</th>
+                    <th className="text-right">Hours</th>
+                    <th className="text-right">Crew</th>
+                    <th>Work Summary</th>
+                    <th>Submitted</th>
+                  </tr></thead>
+                  <tbody>
+                    {dailyReports.map(r => {
+                      let hours = '—'
+                      if (r.start_time && r.end_time) {
+                        const [sh, sm] = r.start_time.split(':').map(Number)
+                        const [eh, em] = r.end_time.split(':').map(Number)
+                        const mins = (eh * 60 + em) - (sh * 60 + sm)
+                        if (mins > 0) hours = (mins / 60).toFixed(1)
+                      }
+                      return (
+                        <tr key={r.id}>
+                          <td style={{ fontSize:12, whiteSpace:'nowrap' }}>{fmt.date(r.report_date)}</td>
+                          <td>{r.employee}</td>
+                          <td className="text-right">{hours}</td>
+                          <td className="text-right">{r.crew_size ?? '—'}</td>
+                          <td style={{ maxWidth:360, fontSize:13 }}>{r.work_summary}</td>
+                          <td style={{ fontSize:11, color:'var(--color-text-3)', whiteSpace:'nowrap' }}>
+                            {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div></div>
+          }
+        </div>
+      )}
+
+      </div>
     </>
   )
 }

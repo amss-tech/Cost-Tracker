@@ -23,7 +23,7 @@ export default function Jobs() {
     async function load() {
       const [j, p, inv, uc, bil, co] = await Promise.all([
         supabase.from('jobs').select('*').order('job_number'),
-        supabase.from('purchase_orders').select('job_id, amount'),
+        supabase.from('purchase_orders').select('id, job_id, amount'),
         supabase.from('invoices').select('job_id, amount, po_id'),
         supabase.from('uncommitted_costs').select('job_id, amount'),
         supabase.from('billings').select('job_id, amount'),
@@ -42,21 +42,27 @@ export default function Jobs() {
 
   if (loading) return <div className="loading-center"><div className="spinner" /></div>
 
-  const posByJob = {}, ucByJob = {}, directInvByJob = {}, billedByJob = {}, coRevenueByJob = {}, coCostByJob = {}
-  pos.forEach(p => { posByJob[p.job_id] = (posByJob[p.job_id] || 0) + (p.amount || 0) })
+  const ucByJob = {}, billedByJob = {}, coRevenueByJob = {}, coCostByJob = {}
   uncommitted.forEach(u => { ucByJob[u.job_id] = (ucByJob[u.job_id] || 0) + (u.amount || 0) })
-  invoices.filter(inv => !inv.po_id).forEach(inv => { directInvByJob[inv.job_id] = (directInvByJob[inv.job_id] || 0) + (inv.amount || 0) })
   billings.forEach(b => { billedByJob[b.job_id] = (billedByJob[b.job_id] || 0) + (b.amount || 0) })
   cos.filter(c => c.status === 'Approved').forEach(c => {
     coRevenueByJob[c.job_id] = (coRevenueByJob[c.job_id] || 0) + (c.revenue_amount || 0)
     coCostByJob[c.job_id] = (coCostByJob[c.job_id] || 0) + (c.cost_amount || 0)
   })
 
+  // Tracked cost: uninvoiced PO balance + all invoices + uncommitted
+  const invoicedByPO = {}
+  invoices.forEach(inv => { if (inv.po_id) invoicedByPO[inv.po_id] = (invoicedByPO[inv.po_id] || 0) + (inv.amount || 0) })
+  const uninvPoByJob = {}
+  pos.forEach(p => { uninvPoByJob[p.job_id] = (uninvPoByJob[p.job_id] || 0) + Math.max(0, (p.amount || 0) - (invoicedByPO[p.id] || 0)) })
+  const allInvByJob = {}
+  invoices.forEach(inv => { allInvByJob[inv.job_id] = (allInvByJob[inv.job_id] || 0) + (inv.amount || 0) })
+
   const pms = [...new Set(jobs.map(j => j.project_manager).filter(Boolean))].sort()
   const types = [...new Set(jobs.map(j => j.job_type).filter(Boolean))].sort()
 
   const filtered = jobs.map(j => {
-    const tracked = (posByJob[j.id] || 0) + (directInvByJob[j.id] || 0) + (ucByJob[j.id] || 0)
+    const tracked = (uninvPoByJob[j.id] || 0) + (allInvByJob[j.id] || 0) + (ucByJob[j.id] || 0)
     const revisedRevenue = (j.estimated_revenue || 0) + (coRevenueByJob[j.id] || 0)
     const revisedCost = (j.estimated_cost || 0) + (coCostByJob[j.id] || 0)
     const variance = revisedCost - tracked

@@ -53,6 +53,9 @@ export default function InvoiceEntry() {
 
   function set(field, val) { setForm(f => ({ ...f, [field]: val })) }
 
+  // Warn if entering a direct invoice for a job that already has POs
+  const showDoubleCountWarning = !form.po_id && jobPOs.length > 0
+
   async function handleSubmit(e) {
     e.preventDefault()
     setSaving(true); setError('')
@@ -104,6 +107,11 @@ export default function InvoiceEntry() {
                   <option value="">— No PO / Direct Invoice —</option>
                   {jobPOs.map(p => <option key={p.id} value={p.id}>{p.po_number || 'No #'} · {p.vendor} · {fmt.currency(p.amount)}</option>)}
                 </select>
+                {showDoubleCountWarning && (
+                  <div style={{ marginTop: 6, padding: '6px 10px', background: '#FAEEDA', border: '1px solid #FAC775', borderRadius: 4, fontSize: 12, color: '#854F0B' }}>
+                    ⚠️ This job has {jobPOs.length} PO{jobPOs.length > 1 ? 's' : ''}. If this invoice is against one of them, select it above — otherwise both the PO and this invoice will be counted as separate costs.
+                  </div>
+                )}
               </div>
             </div>
           </div>

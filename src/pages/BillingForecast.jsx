@@ -98,7 +98,7 @@ function CostCell({ manualValue, autoValue, actualValue, onSave }) {
     <>
       <span
         onClick={() => setEditing(true)}
-        title={isAuto && autoValue > 0 ? 'Auto from uncommitted costs — click to override' : 'Click to edit'}
+        title={isAuto && autoValue > 0 ? 'Auto from uncommitted costs and PO expected dates — click to override' : 'Click to edit'}
         style={{
           display: 'block', textAlign: 'right', cursor: 'pointer', fontSize: 12, padding: '3px 4px', borderRadius: 3,
           fontStyle: isAuto ? 'italic' : 'normal',
@@ -125,6 +125,7 @@ export default function Forecast() {
   const [billings, setBillings] = useState([])
   const [uncommitted, setUncommitted] = useState([])
   const [poLineItems, setPoLineItems] = useState([])
+  const [pos, setPOs] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState({})
   const [filterPM, setFilterPM] = useState('')
@@ -140,8 +141,9 @@ export default function Forecast() {
       supabase.from('billing_forecast').select('*'),
       supabase.from('billings').select('job_id, amount, date_submitted'),
       supabase.from('uncommitted_costs').select('job_id, amount, cost_date, posted'),
-      supabase.from('po_line_items').select('qty, price_each, invoiced, invoice_date, purchase_orders(job_id)'),
-    ]).then(([j, f, bil, uc, pli]) => {
+      supabase.from('po_line_items').select('qty, price_each, invoiced, invoice_date, estimated_ship_date, purchase_orders(id, job_id)'),
+      supabase.from('purchase_orders').select('id, job_id, amount, expected_invoice_date'),
+    ]).then(([j, f, bil, uc, pli, p]) => {
       setJobs(j.data || [])
       const map = {}
       for (const row of f.data || []) {
@@ -152,6 +154,7 @@ export default function Forecast() {
       setBillings(bil.data || [])
       setUncommitted(uc.data || [])
       setPoLineItems(pli.data || [])
+      setPOs(p.data || [])
       setLoading(false)
     })
   }, [])
@@ -182,6 +185,31 @@ export default function Forecast() {
       const m = u.cost_date.slice(0, 7)
       if (!autoForecastByJobMonth[u.job_id]) autoForecastByJobMonth[u.job_id] = {}
       autoForecastByJobMonth[u.job_id][m] = (autoForecastByJobMonth[u.job_id][m] || 0) + (u.amount || 0)
+    }
+  })
+
+  // Pass A — un-invoiced PO line items with estimated_ship_date → auto forecast
+  poLineItems.forEach(li => {
+    if (!li.invoiced && li.estimated_ship_date && li.purchase_orders?.job_id) {
+      const m = li.estimated_ship_date.slice(0, 7)
+      const jid = li.purchase_orders.job_id
+      const amt = (parseFloat(li.qty) || 0) * (parseFloat(li.price_each) || 0)
+      if (amt > 0) {
+        if (!autoForecastByJobMonth[jid]) autoForecastByJobMonth[jid] = {}
+        autoForecastByJobMonth[jid][m] = (autoForecastByJobMonth[jid][m] || 0) + amt
+      }
+    }
+  })
+
+  // Pass B — POs with expected_invoice_date but no line items at all → use PO amount
+  const poIdsWithLines = new Set(poLineItems.map(li => li.purchase_orders?.id).filter(Boolean))
+  pos.forEach(p => {
+    if (!p.expected_invoice_date || !p.job_id || poIdsWithLines.has(p.id)) return
+    const remaining = Math.max(0, p.amount || 0)
+    if (remaining > 0) {
+      const m = p.expected_invoice_date.slice(0, 7)
+      if (!autoForecastByJobMonth[p.job_id]) autoForecastByJobMonth[p.job_id] = {}
+      autoForecastByJobMonth[p.job_id][m] = (autoForecastByJobMonth[p.job_id][m] || 0) + remaining
     }
   })
 
@@ -446,7 +474,7 @@ export default function Forecast() {
           {renderTable('cost')}
 
           <div style={{ marginTop: 10, fontSize: 11, color: 'var(--color-text-3)' }} className="no-print">
-            <em>Italic auto</em> = pulled from uncommitted cost entries with a future cost date. Clear a cell to revert to auto.
+            <em>Italic auto</em> = pulled from uncommitted costs (by cost date) and un-invoiced POs (by estimated ship date or expected invoice date). Clear a cell to revert to auto.
           </div>
         </div>
       </div>
