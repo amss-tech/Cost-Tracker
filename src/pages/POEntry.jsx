@@ -22,11 +22,13 @@ export default function POEntry() {
   const [params] = useSearchParams()
   const editId = params.get('edit')
   const [jobs, setJobs] = useState([])
+  const [suppliers, setSuppliers] = useState([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(!!editId)
   const [error, setError] = useState('')
   const [form, setForm] = useState({
     job_id: params.get('job') || '',
+    supplier_id: '',
     po_number: '', vendor: '', amount: '',
     category: 'Material — Hardware', date_issued: '',
     expected_invoice_date: '', delivery_status: 'Not Ordered',
@@ -38,6 +40,8 @@ export default function POEntry() {
   useEffect(() => {
     supabase.from('jobs').select('id, job_number, job_description').order('job_number')
       .then(({ data }) => setJobs(data || []))
+    supabase.from('suppliers').select('id, name').order('name')
+      .then(({ data }) => setSuppliers(data || []))
   }, [])
 
   useEffect(() => {
@@ -48,6 +52,7 @@ export default function POEntry() {
     ]).then(([{ data: po }, { data: lineData }]) => {
       if (po) setForm({
         job_id: po.job_id || '',
+        supplier_id: po.supplier_id || '',
         po_number: po.po_number || '',
         vendor: po.vendor || '',
         amount: po.amount ?? '',
@@ -86,6 +91,7 @@ export default function POEntry() {
 
     const payload = {
       po_number: form.po_number,
+      supplier_id: form.supplier_id || null,
       vendor: form.vendor,
       amount: parseFloat(form.amount) || 0,
       category: form.category,
@@ -171,6 +177,20 @@ export default function POEntry() {
           <div className="form-section">
             <div className="form-section-title">Vendor & Amount</div>
             <div className="form-grid">
+              <div className="form-group">
+                <label>Supplier</label>
+                <select value={form.supplier_id} onChange={e => {
+                  const id = e.target.value
+                  set('supplier_id', id)
+                  if (id) {
+                    const s = suppliers.find(s => s.id === id)
+                    if (s) set('vendor', s.name)
+                  }
+                }}>
+                  <option value="">— None —</option>
+                  {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
               <div className="form-group">
                 <label>Vendor Name *</label>
                 <input type="text" placeholder="e.g. Anixter, Graybar..." value={form.vendor} onChange={e => set('vendor', e.target.value)} required />
