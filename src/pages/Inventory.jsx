@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt } from '../lib/utils'
-import { Plus, X, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { Plus, X, AlertTriangle, Upload, Download } from 'lucide-react'
+import * as XLSX from 'xlsx'
 
 const UNITS = ['each', 'ft', 'roll', 'box', 'pair', 'set', 'lb', 'kg', 'm']
 
@@ -10,6 +11,190 @@ const UNITS = ['each', 'ft', 'roll', 'box', 'pair', 'set', 'lb', 'kg', 'm']
 
 function today() {
   return new Date().toISOString().slice(0, 10)
+}
+
+function exportInventory(items, suppliers) {
+  const rows = items.map(item => [
+    item.part_number ?? '',
+    item.description,
+    suppliers.find(s => s.id === item.supplier_id)?.name ?? '',
+    item.unit,
+    item.unit_cost ?? '',
+    item.qty_on_hand,
+    item.is_serialized ? 'yes' : 'no',
+    item.location ?? '',
+    item.reorder_point ?? '',
+    item.notes ?? '',
+  ])
+  const headers = ['Part #', 'Description', 'Supplier', 'Unit', 'Unit Cost', 'Qty On Hand', 'Serialized', 'Location', 'Reorder Point', 'Notes']
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = [{ wch: 14 }, { wch: 30 }, { wch: 18 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 11 }, { wch: 16 }, { wch: 14 }, { wch: 24 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventory')
+  XLSX.writeFile(wb, `inventory-export-${today()}.xlsx`)
+}
+
+function downloadTemplate() {
+  const headers = ['Part #', 'Description *', 'Supplier', 'Unit', 'Unit Cost', 'Qty On Hand', 'Serialized (yes/no)', 'Location', 'Reorder Point', 'Notes']
+  const sample = [
+    ['CAT6-1000BL', 'Cat6 Cable 1000ft Blue', 'Anixter', 'roll', 185.00, 5, 'no', 'Shelf A1', 2, ''],
+    ['SNLD-CAM-001', 'IP Camera 4MP Dome', 'Axis', 'each', 220.00, 0, 'yes', 'Cage B', '', 'Serial tracked'],
+    ['PATCH-3FT', 'Cat6 Patch Cable 3ft Gray', 'Anixter', 'each', 4.50, 100, 'no', 'Shelf A2', 20, ''],
+  ]
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample])
+  ws['!cols'] = [{ wch: 14 }, { wch: 30 }, { wch: 18 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 24 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventory')
+  XLSX.writeFile(wb, 'inventory-import-template.xlsx')
+}
+
+// ─── Import modal ─────────────────────────────────────────────────────────────
+
+function ImportModal({ suppliers, onSaved, onClose }) {
+  const fileRef = useRef()
+  const [rows, setRows] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+
+  function handleFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    setError(''); setRows(null); setDone(false)
+    const reader = new FileReader()
+    reader.onload = evt => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: 'binary' })
+        const sheet = wb.Sheets[wb.SheetNames[0]]
+        const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+        // Skip header row
+        const parsed = raw.slice(1).map(r => ({
+          part_number: String(r[0] || '').trim() || null,
+          description: String(r[1] || '').trim(),
+          supplier_name: String(r[2] || '').trim(),
+          unit: String(r[3] || '').trim() || 'each',
+          unit_cost: parseFloat(r[4]) || null,
+          qty_on_hand: parseFloat(r[5]) || 0,
+          is_serialized: String(r[6] || '').toLowerCase().trim() === 'yes',
+          location: String(r[7] || '').trim() || null,
+          reorder_point: parseFloat(r[8]) || null,
+          notes: String(r[9] || '').trim() || null,
+        })).filter(r => r.description)
+        if (parsed.length === 0) { setError('No valid rows found. Description is required.'); return }
+        setRows(parsed)
+      } catch {
+        setError('Could not parse file. Use the template format.')
+      }
+    }
+    reader.readAsBinaryString(file)
+  }
+
+  async function handleImport() {
+    setImporting(true); setError('')
+    const payload = rows.map(r => {
+      const sup = suppliers.find(s => s.name.toLowerCase() === r.supplier_name.toLowerCase())
+      return {
+        part_number: r.part_number,
+        description: r.description,
+        supplier_id: sup?.id ?? null,
+        unit: UNITS.includes(r.unit) ? r.unit : 'each',
+        unit_cost: r.unit_cost,
+        qty_on_hand: r.is_serialized ? 0 : r.qty_on_hand,
+        is_serialized: r.is_serialized,
+        location: r.location,
+        reorder_point: r.reorder_point,
+        notes: r.notes,
+      }
+    })
+    const { error: err } = await supabase.from('inventory_items').insert(payload)
+    setImporting(false)
+    if (err) { setError(err.message); return }
+    setDone(true)
+  }
+
+  return (
+    <div style={overlayStyle}>
+      <div style={{ ...modalStyle, maxWidth: 680 }}>
+        <div style={modalHeader}>
+          <strong>Import Inventory Items</strong>
+          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
+        </div>
+
+        {done ? (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-success)', marginBottom: 8 }}>
+              {rows.length} item{rows.length !== 1 ? 's' : ''} imported successfully.
+            </div>
+            <button className="btn btn-primary" onClick={onSaved}>Done</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile}
+                style={{ flex: 1, fontSize: 13 }} />
+              <button className="btn btn-sm" onClick={downloadTemplate}>
+                <Download size={13} /> Template
+              </button>
+            </div>
+
+            {rows && (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--color-text-2)', marginBottom: 8 }}>
+                  {rows.length} row{rows.length !== 1 ? 's' : ''} ready to import
+                  {rows.some(r => r.supplier_name && !suppliers.find(s => s.name.toLowerCase() === r.supplier_name.toLowerCase())) && (
+                    <span style={{ color: 'var(--color-warning)', marginLeft: 8 }}>
+                      — some supplier names not matched (will import without supplier link)
+                    </span>
+                  )}
+                </div>
+                <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 4 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--color-bg-2, var(--color-card))' }}>
+                        {['Part #', 'Description', 'Supplier', 'Unit', 'Cost', 'Qty', 'Serial', 'Location'].map(h => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: 'left', borderBottom: '1px solid var(--color-border)', fontWeight: 600, fontSize: 11, color: 'var(--color-text-3)' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, i) => {
+                        const supplierMatch = r.supplier_name ? !!suppliers.find(s => s.name.toLowerCase() === r.supplier_name.toLowerCase()) : true
+                        return (
+                          <tr key={i} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                            <td style={tdStyle}>{r.part_number || '—'}</td>
+                            <td style={tdStyle}>{r.description}</td>
+                            <td style={{ ...tdStyle, color: supplierMatch ? 'inherit' : 'var(--color-warning)' }}>
+                              {r.supplier_name || '—'}
+                            </td>
+                            <td style={tdStyle}>{r.unit}</td>
+                            <td style={tdStyle}>{r.unit_cost != null ? fmt.currency(r.unit_cost) : '—'}</td>
+                            <td style={tdStyle}>{r.is_serialized ? '—' : r.qty_on_hand}</td>
+                            <td style={tdStyle}>{r.is_serialized ? '✓' : ''}</td>
+                            <td style={tdStyle}>{r.location || '—'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {error && <p style={errStyle}>{error}</p>}
+
+            <div style={modalFooter}>
+              <button className="btn" onClick={onClose}>Cancel</button>
+              {rows && (
+                <button className="btn btn-primary" onClick={handleImport} disabled={importing}>
+                  {importing ? <span className="spinner" style={{ width: 14, height: 14 }} /> : `Import ${rows.length} Item${rows.length !== 1 ? 's' : ''}`}
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ─── Item form ───────────────────────────────────────────────────────────────
@@ -552,6 +737,12 @@ export default function Inventory() {
               <AlertTriangle size={13} /> {lowStockCount} low stock
             </span>
           )}
+          <button className="btn btn-sm" onClick={() => setModal({ type: 'import' })}>
+            <Upload size={13} /> Import
+          </button>
+          <button className="btn btn-sm" onClick={() => exportInventory(items, suppliers)} disabled={items.length === 0}>
+            <Download size={13} /> Export
+          </button>
           <button className="btn btn-primary btn-sm" onClick={() => setModal({ type: 'add' })}>
             <Plus size={13} /> Add Item
           </button>
@@ -771,6 +962,9 @@ export default function Inventory() {
       </div>
 
       {/* Modals */}
+      {modal?.type === 'import' && (
+        <ImportModal suppliers={suppliers} onSaved={afterSave} onClose={closeModal} />
+      )}
       {modal?.type === 'add' && (
         <ItemForm suppliers={suppliers} onSaved={afterSave} onClose={closeModal} />
       )}
@@ -814,3 +1008,4 @@ const errStyle = { color: 'var(--color-danger)', fontSize: 12, marginTop: 8 }
 const liLabel = { fontSize: 10, fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase', letterSpacing: '0.04em' }
 const statLabel = { fontSize: 11, color: 'var(--color-text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }
 const statVal = { fontSize: 20, fontWeight: 700, color: 'var(--color-text-1)' }
+const tdStyle = { padding: '5px 8px', color: 'var(--color-text-1)' }
