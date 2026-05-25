@@ -20,6 +20,7 @@ import TimecardImport from './pages/TimecardImport'
 import OverheadHours from './pages/OverheadHours'
 import BOMImport from './pages/BOMImport'
 import FieldReport from './pages/FieldReport'
+import Inventory from './pages/Inventory'
 
 function PrivateRoute({ session, children }) {
   if (!session) return <Navigate to="/login" replace />
@@ -70,6 +71,7 @@ export default function App() {
                 <Route path="/timecard-import" element={<TimecardImport />} />
                 <Route path="/overhead-hours" element={<OverheadHours />} />
                 <Route path="/bom-import" element={<BOMImport />} />
+                <Route path="/inventory" element={<Inventory />} />
               </Routes>
             </Shell>
           </PrivateRoute>

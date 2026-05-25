@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
   LayoutDashboard, Briefcase, FileText, Receipt,
-  Wrench, Upload, GitCompareArrows, LogOut, Plus, Sun, Moon, BarChart2, CalendarDays, Clock, Users, ClipboardList, Table2
+  Wrench, Upload, GitCompareArrows, LogOut, Plus, Sun, Moon, BarChart2, CalendarDays, Clock, Users, ClipboardList, Table2, Package
 } from 'lucide-react'
 
 const nav = [
@@ -16,6 +16,7 @@ const nav = [
   { label: 'Reports', path: '/reports', icon: BarChart2 },
   { label: 'Enter PO', path: '/po-entry', icon: FileText },
   { label: 'Enter Invoice', path: '/invoice-entry', icon: Receipt },
+  { label: 'Inventory', path: '/inventory', icon: Package },
   { label: 'Uncommitted Costs', path: '/uncommitted', icon: Wrench },
   { label: 'Data', section: true },
   { label: 'Import WIP', path: '/wip-import', icon: Upload },
