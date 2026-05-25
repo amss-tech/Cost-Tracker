@@ -18,6 +18,8 @@ export default function JobDetail() {
   const [loading, setLoading] = useState(true)
   const [timeEntries, setTimeEntries] = useState([])
   const [dailyReports, setDailyReports] = useState([])
+  const [invTxns, setInvTxns] = useState([])
+  const [invSerials, setInvSerials] = useState([])
   const [timeForm, setTimeForm] = useState(null)
   const [documents, setDocuments] = useState([])
   const [docForm, setDocForm] = useState({ label: '', url: '' })
@@ -29,7 +31,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs, dr] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -39,6 +41,8 @@ export default function JobDetail() {
         supabase.from('time_entries').select('*').eq('job_id', id).order('work_date'),
         supabase.from('job_documents').select('*').eq('job_id', id).order('created_at'),
         supabase.from('daily_reports').select('*').eq('job_id', id).order('report_date', { ascending: false }),
+        supabase.from('inventory_transactions').select('*, item:inventory_items(description, part_number, unit, unit_cost)').eq('job_id', id).eq('txn_type', 'issue').order('txn_date', { ascending: false }),
+        supabase.from('inventory_serials').select('id, serial_number, issue_txn_id').eq('job_id', id).eq('status', 'installed'),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -49,6 +53,8 @@ export default function JobDetail() {
       setTimeEntries(te.data || [])
       setDocuments(docs.data || [])
       setDailyReports(dr.data || [])
+      setInvTxns(it.data || [])
+      setInvSerials(is_.data || [])
       setLoading(false)
     }
     load()
@@ -429,6 +435,9 @@ export default function JobDetail() {
         </button>
         <button className={`tab ${activeTab==='reports'?'active':''}`} onClick={() => setActiveTab('reports')}>
           <ClipboardList size={12} style={{ marginRight: 4 }} />Daily Reports {dailyReports.length > 0 ? `(${dailyReports.length})` : ''}
+        </button>
+        <button className={`tab ${activeTab==='materials'?'active':''}`} onClick={() => setActiveTab('materials')}>
+          Materials {invTxns.length > 0 ? `(${invTxns.length})` : ''}
         </button>
       </div>
 
@@ -1004,6 +1013,96 @@ export default function JobDetail() {
           }
         </div>
       )}
+
+      {/* Materials Used */}
+      {activeTab === 'materials' && (() => {
+        const serialsByTxn = {}
+        invSerials.forEach(s => {
+          if (s.issue_txn_id) {
+            serialsByTxn[s.issue_txn_id] = [...(serialsByTxn[s.issue_txn_id] || []), s.serial_number]
+          }
+        })
+        const totalQty = invTxns.reduce((s, t) => s + Math.abs(t.qty || 0), 0)
+        const totalValue = invTxns.reduce((s, t) => s + Math.abs(t.qty || 0) * (t.item?.unit_cost || 0), 0)
+        return (
+          <div className="tab-content">
+            {invTxns.length > 0 && (
+              <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                  <div className="metric-label">Transactions</div>
+                  <div className="metric-value" style={{ fontSize: 20 }}>{invTxns.length}</div>
+                </div>
+                <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                  <div className="metric-label">Total Units Issued</div>
+                  <div className="metric-value" style={{ fontSize: 20 }}>{totalQty}</div>
+                </div>
+                {totalValue > 0 && (
+                  <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                    <div className="metric-label">Est. Material Value</div>
+                    <div className="metric-value" style={{ fontSize: 20 }}>{fmt.currency(totalValue)}</div>
+                  </div>
+                )}
+                {invSerials.length > 0 && (
+                  <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                    <div className="metric-label">Serials Installed</div>
+                    <div className="metric-value" style={{ fontSize: 20 }}>{invSerials.length}</div>
+                  </div>
+                )}
+              </div>
+            )}
+            {invTxns.length === 0
+              ? <div className="empty-state"><p>No inventory issued to this job yet.</p></div>
+              : <div className="card"><div className="table-wrap">
+                  <table>
+                    <thead><tr>
+                      <th>Date</th>
+                      <th>Item</th>
+                      <th>Part #</th>
+                      <th className="text-right">Qty</th>
+                      <th>Unit</th>
+                      <th className="text-right">Unit Cost</th>
+                      <th className="text-right">Value</th>
+                      <th>Issued By</th>
+                      <th>Serial #s</th>
+                    </tr></thead>
+                    <tbody>
+                      {invTxns.map(t => {
+                        const qty = Math.abs(t.qty || 0)
+                        const unitCost = t.item?.unit_cost
+                        const serials = serialsByTxn[t.id] || []
+                        const source = t.notes?.replace(/^Field report — /, '') ?? '—'
+                        return (
+                          <tr key={t.id}>
+                            <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmt.date(t.txn_date)}</td>
+                            <td className="fw-500">{t.item?.description ?? '—'}</td>
+                            <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{t.item?.part_number || '—'}</td>
+                            <td className="text-right fw-500">{qty}</td>
+                            <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{t.item?.unit ?? '—'}</td>
+                            <td className="text-right" style={{ fontSize: 12 }}>{unitCost != null ? fmt.currency(unitCost) : '—'}</td>
+                            <td className="text-right" style={{ fontSize: 12, fontWeight: unitCost ? 500 : 400 }}>
+                              {unitCost != null ? fmt.currency(qty * unitCost) : '—'}
+                            </td>
+                            <td style={{ fontSize: 12, color: 'var(--color-text-2)' }}>{source}</td>
+                            <td style={{ fontSize: 12, fontFamily: serials.length ? 'monospace' : 'inherit', color: 'var(--color-text-2)' }}>
+                              {serials.length ? serials.join(', ') : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {totalValue > 0 && (
+                        <tr style={{ background: 'var(--color-sidebar)', fontWeight: 500 }}>
+                          <td colSpan={6} style={{ textAlign: 'right', fontSize: 12, color: 'var(--color-text-2)' }}>Est. Total Value</td>
+                          <td className="text-right fw-500">{fmt.currency(totalValue)}</td>
+                          <td colSpan={2} />
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div></div>
+            }
+          </div>
+        )
+      })()}
 
       </div>
     </>
