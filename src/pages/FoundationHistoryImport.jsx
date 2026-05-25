@@ -17,14 +17,6 @@ function parseDate(s) {
   return `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`
 }
 
-function mapCategory(source, cls) {
-  if (source === 'P/R') return 'Labor'
-  if (cls === 'MAT') return 'Material'
-  if (cls === 'SUB' || cls === 'SBC') return 'Subcontractor'
-  if (cls === 'EQP' || cls === 'EQR') return 'Equipment Rental'
-  return 'Other'
-}
-
 // Simple CSV parser that handles quoted fields (including ="..." Excel formula cells)
 function parseCSV(text) {
   const lines = text.split('\n').filter(l => l.trim())
@@ -73,6 +65,7 @@ function parseHistoryCSV(text) {
 
     const source = String(row[6] || '').trim()
     const cls = String(row[8] || '').trim()
+    const rawCategory = String(row[9] || '').trim() || null
     const dollars = parseFloat(row[10]) || 0
     const hoursRaw = parseFloat(xlCell(row[11])) || 0
     const comment = String(row[12] || '').replace(/^"\s*|\s*"$/g, '').trim()
@@ -86,8 +79,8 @@ function parseHistoryCSV(text) {
     if (comment) descParts.push(comment)
     const description = descParts.join(' — ')
 
-    const hours = (source === 'P/R' || source === 'G/J') && hoursRaw > 0 ? hoursRaw : null
-    const rate = hours && dollars > 0 ? dollars / hours : null
+    const hours = hoursRaw > 0 ? hoursRaw : null
+    const rate = hours && dollars > 0 ? Math.round((dollars / hours) * 100) / 100 : null
 
     const entry = {
       cost_date,
@@ -95,11 +88,11 @@ function parseHistoryCSV(text) {
       class: cls,
       cost_code: costCode,
       cost_code_desc: costCodeDesc,
-      category: mapCategory(source, cls),
+      category: rawCategory,
       description,
       dollars,
       hours,
-      rate: rate ? Math.round(rate * 100) / 100 : null,
+      rate,
       comment: comment || null,
     }
 

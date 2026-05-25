@@ -4,6 +4,24 @@ import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
 import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database } from 'lucide-react'
 
+const GL_CLASS_GROUPS = [
+  { label: 'Labor',            codes: ['LAB', 'LPM'] },
+  { label: 'Material',         codes: ['MAT'] },
+  { label: 'Subcontractor',    codes: ['SUB'] },
+  { label: 'Fuel',             codes: ['ENE'] },
+  { label: 'Travel',           codes: ['TRV', 'MLS', 'PER'] },
+  { label: 'Fringe',           codes: ['FRN', 'OTH'] },
+  { label: 'Rented Equipment', codes: ['REQ'] },
+  { label: 'Taxes',            codes: ['TAX'] },
+  { label: 'Freight',          codes: ['FRT'] },
+  { label: 'Warranty',         codes: ['WAR'] },
+]
+
+function glGroupLabel(cls) {
+  const g = GL_CLASS_GROUPS.find(g => g.codes.includes(cls))
+  return g ? g.label : (cls || 'Other')
+}
+
 export default function JobDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -21,7 +39,8 @@ export default function JobDetail() {
   const [invTxns, setInvTxns] = useState([])
   const [invSerials, setInvSerials] = useState([])
   const [foundationCosts, setFoundationCosts] = useState([])
-  const [glFilter, setGlFilter] = useState('All')
+  const [glClassFilter, setGlClassFilter] = useState('All')
+  const [glCostCode, setGlCostCode] = useState('All')
   const [timeForm, setTimeForm] = useState(null)
   const [documents, setDocuments] = useState([])
   const [docForm, setDocForm] = useState({ label: '', url: '' })
@@ -1113,13 +1132,38 @@ export default function JobDetail() {
 
       {/* GL History */}
       {activeTab === 'gl-history' && (() => {
-        const sources = ['All', 'P/R', 'A/P', 'G/J']
-        const filtered = glFilter === 'All' ? foundationCosts : foundationCosts.filter(r => r.source === glFilter)
+        // Build class-group summary over all rows (unfiltered)
+        const groupSummary = GL_CLASS_GROUPS.map(g => {
+          const rows = foundationCosts.filter(r => g.codes.includes(r.class))
+          if (!rows.length) return null
+          return {
+            label: g.label,
+            dollars: rows.reduce((s, r) => s + (r.dollars || 0), 0),
+            hours: rows.reduce((s, r) => s + (r.hours || 0), 0),
+          }
+        }).filter(Boolean)
+
+        // Apply filters
+        let filtered = foundationCosts
+        if (glClassFilter !== 'All') {
+          const g = GL_CLASS_GROUPS.find(g => g.label === glClassFilter)
+          if (g) filtered = filtered.filter(r => g.codes.includes(r.class))
+        }
+        if (glCostCode !== 'All') {
+          filtered = filtered.filter(r => r.cost_code === glCostCode)
+        }
+
         const totalDollars = filtered.reduce((s, r) => s + (r.dollars || 0), 0)
         const totalHours = filtered.reduce((s, r) => s + (r.hours || 0), 0)
-        const dateRange = foundationCosts.length > 0
-          ? `${fmt.date(foundationCosts[0].cost_date)} – ${fmt.date(foundationCosts[foundationCosts.length - 1].cost_date)}`
-          : null
+
+        // Cost codes present in current class filter
+        const costCodesInView = ['All', ...new Set(
+          (glClassFilter === 'All' ? foundationCosts : filtered).map(r => r.cost_code).filter(Boolean).sort((a, b) => +a - +b)
+        )]
+
+        // Present class groups (for filter chips)
+        const presentGroups = GL_CLASS_GROUPS.filter(g => foundationCosts.some(r => g.codes.includes(r.class)))
+
         return (
           <div className="tab-content">
             {foundationCosts.length === 0
@@ -1133,53 +1177,113 @@ export default function JobDetail() {
               )
               : (
                 <>
-                  <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
-                      <div className="metric-label">Total GL Cost</div>
-                      <div className="metric-value" style={{ fontSize: 20 }}>{fmt.currency(totalDollars)}</div>
-                    </div>
-                    <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
-                      <div className="metric-label">Labor Hours</div>
-                      <div className="metric-value" style={{ fontSize: 20 }}>{totalHours.toFixed(1)}</div>
-                    </div>
-                    <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
-                      <div className="metric-label">Transactions</div>
-                      <div className="metric-value" style={{ fontSize: 20 }}>{filtered.length.toLocaleString()}</div>
-                    </div>
-                    {dateRange && (
-                      <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
-                        <div className="metric-label">Date Range</div>
-                        <div className="metric-value" style={{ fontSize: 13, fontWeight: 500 }}>{dateRange}</div>
-                      </div>
-                    )}
-                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                      {sources.map(s => (
-                        <button
-                          key={s}
-                          className="btn btn-sm"
-                          style={{
-                            background: glFilter === s ? 'var(--color-primary)' : 'transparent',
-                            color: glFilter === s ? '#fff' : 'var(--color-text-2)',
-                            border: glFilter === s ? 'none' : '1px solid var(--color-border)',
-                          }}
-                          onClick={() => setGlFilter(s)}
-                        >
-                          {s}
-                        </button>
-                      ))}
+                  {/* Cost breakdown by class group */}
+                  <div className="card" style={{ marginBottom: 16 }}>
+                    <table style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ padding: '8px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--color-text-3)', borderBottom: '1px solid var(--color-border)' }}>Class</th>
+                          <th style={{ padding: '8px 14px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--color-text-3)', borderBottom: '1px solid var(--color-border)' }}>Hours</th>
+                          <th style={{ padding: '8px 14px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--color-text-3)', borderBottom: '1px solid var(--color-border)' }}>Dollars</th>
+                          <th style={{ padding: '8px 14px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--color-text-3)', borderBottom: '1px solid var(--color-border)' }}>% of Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupSummary.map(g => {
+                          const allDollars = groupSummary.reduce((s, x) => s + x.dollars, 0)
+                          const pct = allDollars > 0 ? (g.dollars / allDollars * 100).toFixed(1) : '—'
+                          return (
+                            <tr
+                              key={g.label}
+                              style={{ cursor: 'pointer', background: glClassFilter === g.label ? 'var(--color-sidebar)' : undefined }}
+                              onClick={() => setGlClassFilter(glClassFilter === g.label ? 'All' : g.label)}
+                            >
+                              <td style={{ padding: '7px 14px', fontSize: 13, fontWeight: 500 }}>
+                                {glClassFilter === g.label && <span style={{ color: 'var(--color-primary)', marginRight: 6 }}>▶</span>}
+                                {g.label}
+                              </td>
+                              <td style={{ padding: '7px 14px', textAlign: 'right', fontSize: 13, color: 'var(--color-text-2)' }}>
+                                {g.hours > 0 ? g.hours.toFixed(1) : '—'}
+                              </td>
+                              <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 500, fontSize: 13 }}>
+                                {fmt.currency(g.dollars)}
+                              </td>
+                              <td style={{ padding: '7px 14px', textAlign: 'right', fontSize: 12, color: 'var(--color-text-3)' }}>
+                                {pct}%
+                              </td>
+                            </tr>
+                          )
+                        })}
+                        <tr style={{ borderTop: '1px solid var(--color-border)', background: 'var(--color-sidebar)' }}>
+                          <td style={{ padding: '8px 14px', fontWeight: 600, fontSize: 13 }}>Total</td>
+                          <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600, fontSize: 13 }}>
+                            {groupSummary.reduce((s, g) => s + g.hours, 0) > 0
+                              ? groupSummary.reduce((s, g) => s + g.hours, 0).toFixed(1)
+                              : '—'}
+                          </td>
+                          <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600, fontSize: 13 }}>
+                            {fmt.currency(groupSummary.reduce((s, g) => s + g.dollars, 0))}
+                          </td>
+                          <td />
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Filters */}
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button
+                      className="btn btn-sm"
+                      style={{
+                        background: glClassFilter === 'All' ? 'var(--color-primary)' : 'transparent',
+                        color: glClassFilter === 'All' ? '#fff' : 'var(--color-text-2)',
+                        border: glClassFilter === 'All' ? 'none' : '1px solid var(--color-border)',
+                      }}
+                      onClick={() => { setGlClassFilter('All'); setGlCostCode('All') }}
+                    >
+                      All Classes
+                    </button>
+                    {presentGroups.map(g => (
+                      <button
+                        key={g.label}
+                        className="btn btn-sm"
+                        style={{
+                          background: glClassFilter === g.label ? 'var(--color-primary)' : 'transparent',
+                          color: glClassFilter === g.label ? '#fff' : 'var(--color-text-2)',
+                          border: glClassFilter === g.label ? 'none' : '1px solid var(--color-border)',
+                        }}
+                        onClick={() => { setGlClassFilter(glClassFilter === g.label ? 'All' : g.label); setGlCostCode('All') }}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>Cost Code</span>
+                      <select
+                        value={glCostCode}
+                        onChange={e => setGlCostCode(e.target.value)}
+                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text)' }}
+                      >
+                        {costCodesInView.map(c => (
+                          <option key={c} value={c}>
+                            {c === 'All' ? 'All' : `${c}${foundationCosts.find(r => r.cost_code === c)?.cost_code_desc ? ' — ' + foundationCosts.find(r => r.cost_code === c).cost_code_desc : ''}`}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
+                  {/* Detail table */}
                   <div className="card">
                     <div className="table-wrap">
                       <table>
                         <thead>
                           <tr>
                             <th>Date</th>
-                            <th>Source</th>
-                            <th>Class</th>
                             <th>Cost Code</th>
                             <th>Description</th>
+                            <th>Class</th>
+                            <th>Category</th>
                             <th className="text-right">Hours</th>
                             <th className="text-right">Dollars</th>
                           </tr>
@@ -1188,14 +1292,17 @@ export default function JobDetail() {
                           {filtered.map(r => (
                             <tr key={r.id}>
                               <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmt.date(r.cost_date)}</td>
-                              <td>
-                                <span className={`badge ${r.source === 'P/R' ? 'badge-blue' : r.source === 'A/P' ? 'badge-green' : 'badge-gray'}`}>
-                                  {r.source}
-                                </span>
+                              <td style={{ fontSize: 12, fontWeight: 500 }}>{r.cost_code || '—'}</td>
+                              <td style={{ fontSize: 13, color: 'var(--color-text-2)', maxWidth: 300 }}>
+                                <div>{r.cost_code_desc}</div>
+                                {r.comment && r.comment !== r.cost_code_desc && (
+                                  <div style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{r.comment}</div>
+                                )}
                               </td>
-                              <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{r.class || '—'}</td>
-                              <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{r.cost_code || '—'}</td>
-                              <td style={{ fontSize: 13, color: 'var(--color-text-2)', maxWidth: 320 }}>{r.description}</td>
+                              <td style={{ fontSize: 12 }}>{glGroupLabel(r.class)}</td>
+                              <td style={{ fontSize: 12, color: r.category ? 'var(--color-text-2)' : 'var(--color-text-3)' }}>
+                                {r.category || '—'}
+                              </td>
                               <td className="text-right" style={{ fontSize: 12 }}>
                                 {r.hours ? r.hours.toFixed(2) : '—'}
                               </td>
@@ -1204,7 +1311,7 @@ export default function JobDetail() {
                           ))}
                           <tr style={{ background: 'var(--color-sidebar)', fontWeight: 500 }}>
                             <td colSpan={5} style={{ textAlign: 'right', fontSize: 12, color: 'var(--color-text-2)' }}>
-                              Total ({filtered.length.toLocaleString()} rows)
+                              {filtered.length.toLocaleString()} rows
                             </td>
                             <td className="text-right">{totalHours > 0 ? totalHours.toFixed(2) : '—'}</td>
                             <td className="text-right fw-500">{fmt.currency(totalDollars)}</td>
