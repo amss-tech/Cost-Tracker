@@ -4,6 +4,7 @@ import WIPReport from './reports/WIPReport'
 import BillingReport from './reports/BillingReport'
 import CostForecastReport from './reports/CostForecastReport'
 import LaborReport from './reports/LaborReport'
+import InventoryReport from './reports/InventoryReport'
 
 const REPORTS = [
   { key: 'job-cost', label: 'Job Cost Summary', Component: JobCostReport },
@@ -11,6 +12,7 @@ const REPORTS = [
   { key: 'billing', label: 'Billing Status', Component: BillingReport },
   { key: 'forecast', label: 'Cost Forecast', Component: CostForecastReport },
   { key: 'labor', label: 'Labor Hours', Component: LaborReport },
+  { key: 'inventory', label: 'Inventory', Component: InventoryReport },
 ]
 
 export default function Reports() {
