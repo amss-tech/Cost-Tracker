@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
-import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList } from 'lucide-react'
+import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database } from 'lucide-react'
 
 export default function JobDetail() {
   const { id } = useParams()
@@ -20,6 +20,8 @@ export default function JobDetail() {
   const [dailyReports, setDailyReports] = useState([])
   const [invTxns, setInvTxns] = useState([])
   const [invSerials, setInvSerials] = useState([])
+  const [foundationCosts, setFoundationCosts] = useState([])
+  const [glFilter, setGlFilter] = useState('All')
   const [timeForm, setTimeForm] = useState(null)
   const [documents, setDocuments] = useState([])
   const [docForm, setDocForm] = useState({ label: '', url: '' })
@@ -31,7 +33,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -43,6 +45,7 @@ export default function JobDetail() {
         supabase.from('daily_reports').select('*').eq('job_id', id).order('report_date', { ascending: false }),
         supabase.from('inventory_transactions').select('*, item:inventory_items(description, part_number, unit, unit_cost)').eq('job_id', id).eq('txn_type', 'issue').order('txn_date', { ascending: false }),
         supabase.from('inventory_serials').select('id, serial_number, issue_txn_id').eq('job_id', id).eq('status', 'installed'),
+        supabase.from('foundation_costs').select('*').eq('job_id', id).order('cost_date'),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -55,6 +58,7 @@ export default function JobDetail() {
       setDailyReports(dr.data || [])
       setInvTxns(it.data || [])
       setInvSerials(is_.data || [])
+      setFoundationCosts(fc.data || [])
       setLoading(false)
     }
     load()
@@ -438,6 +442,9 @@ export default function JobDetail() {
         </button>
         <button className={`tab ${activeTab==='materials'?'active':''}`} onClick={() => setActiveTab('materials')}>
           Materials {invTxns.length > 0 ? `(${invTxns.length})` : ''}
+        </button>
+        <button className={`tab ${activeTab==='gl-history'?'active':''}`} onClick={() => setActiveTab('gl-history')}>
+          <Database size={12} style={{ marginRight: 4 }} />GL History {foundationCosts.length > 0 ? `(${foundationCosts.length})` : ''}
         </button>
       </div>
 
@@ -1099,6 +1106,115 @@ export default function JobDetail() {
                     </tbody>
                   </table>
                 </div></div>
+            }
+          </div>
+        )
+      })()}
+
+      {/* GL History */}
+      {activeTab === 'gl-history' && (() => {
+        const sources = ['All', 'P/R', 'A/P', 'G/J']
+        const filtered = glFilter === 'All' ? foundationCosts : foundationCosts.filter(r => r.source === glFilter)
+        const totalDollars = filtered.reduce((s, r) => s + (r.dollars || 0), 0)
+        const totalHours = filtered.reduce((s, r) => s + (r.hours || 0), 0)
+        const dateRange = foundationCosts.length > 0
+          ? `${fmt.date(foundationCosts[0].cost_date)} – ${fmt.date(foundationCosts[foundationCosts.length - 1].cost_date)}`
+          : null
+        return (
+          <div className="tab-content">
+            {foundationCosts.length === 0
+              ? (
+                <div className="empty-state">
+                  <p>No GL history imported for this job.</p>
+                  <a href="/foundation-history-import" style={{ fontSize: 13, color: 'var(--color-primary)' }}>
+                    Import Foundation Job History →
+                  </a>
+                </div>
+              )
+              : (
+                <>
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                      <div className="metric-label">Total GL Cost</div>
+                      <div className="metric-value" style={{ fontSize: 20 }}>{fmt.currency(totalDollars)}</div>
+                    </div>
+                    <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                      <div className="metric-label">Labor Hours</div>
+                      <div className="metric-value" style={{ fontSize: 20 }}>{totalHours.toFixed(1)}</div>
+                    </div>
+                    <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                      <div className="metric-label">Transactions</div>
+                      <div className="metric-value" style={{ fontSize: 20 }}>{filtered.length.toLocaleString()}</div>
+                    </div>
+                    {dateRange && (
+                      <div className="metric-card" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                        <div className="metric-label">Date Range</div>
+                        <div className="metric-value" style={{ fontSize: 13, fontWeight: 500 }}>{dateRange}</div>
+                      </div>
+                    )}
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                      {sources.map(s => (
+                        <button
+                          key={s}
+                          className="btn btn-sm"
+                          style={{
+                            background: glFilter === s ? 'var(--color-primary)' : 'transparent',
+                            color: glFilter === s ? '#fff' : 'var(--color-text-2)',
+                            border: glFilter === s ? 'none' : '1px solid var(--color-border)',
+                          }}
+                          onClick={() => setGlFilter(s)}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Source</th>
+                            <th>Class</th>
+                            <th>Cost Code</th>
+                            <th>Description</th>
+                            <th className="text-right">Hours</th>
+                            <th className="text-right">Dollars</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filtered.map(r => (
+                            <tr key={r.id}>
+                              <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmt.date(r.cost_date)}</td>
+                              <td>
+                                <span className={`badge ${r.source === 'P/R' ? 'badge-blue' : r.source === 'A/P' ? 'badge-green' : 'badge-gray'}`}>
+                                  {r.source}
+                                </span>
+                              </td>
+                              <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{r.class || '—'}</td>
+                              <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{r.cost_code || '—'}</td>
+                              <td style={{ fontSize: 13, color: 'var(--color-text-2)', maxWidth: 320 }}>{r.description}</td>
+                              <td className="text-right" style={{ fontSize: 12 }}>
+                                {r.hours ? r.hours.toFixed(2) : '—'}
+                              </td>
+                              <td className="text-right fw-500">{fmt.currency(r.dollars)}</td>
+                            </tr>
+                          ))}
+                          <tr style={{ background: 'var(--color-sidebar)', fontWeight: 500 }}>
+                            <td colSpan={5} style={{ textAlign: 'right', fontSize: 12, color: 'var(--color-text-2)' }}>
+                              Total ({filtered.length.toLocaleString()} rows)
+                            </td>
+                            <td className="text-right">{totalHours > 0 ? totalHours.toFixed(2) : '—'}</td>
+                            <td className="text-right fw-500">{fmt.currency(totalDollars)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )
             }
           </div>
         )

@@ -21,6 +21,7 @@ import OverheadHours from './pages/OverheadHours'
 import BOMImport from './pages/BOMImport'
 import FieldReport from './pages/FieldReport'
 import Inventory from './pages/Inventory'
+import FoundationHistoryImport from './pages/FoundationHistoryImport'
 
 function PrivateRoute({ session, children }) {
   if (!session) return <Navigate to="/login" replace />
@@ -72,6 +73,7 @@ export default function App() {
                 <Route path="/overhead-hours" element={<OverheadHours />} />
                 <Route path="/bom-import" element={<BOMImport />} />
                 <Route path="/inventory" element={<Inventory />} />
+                <Route path="/foundation-history-import" element={<FoundationHistoryImport />} />
               </Routes>
             </Shell>
           </PrivateRoute>

@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
   LayoutDashboard, Briefcase, FileText, Receipt,
-  Wrench, Upload, GitCompareArrows, LogOut, Plus, Sun, Moon, BarChart2, CalendarDays, Clock, Users, ClipboardList, Table2, Package
+  Wrench, Upload, GitCompareArrows, LogOut, Plus, Sun, Moon, BarChart2, CalendarDays, Clock, Users, ClipboardList, Table2, Package, FileSearch
 } from 'lucide-react'
 
 const nav = [
@@ -23,6 +23,7 @@ const nav = [
   { label: 'Import Timecards', path: '/timecard-import', icon: Clock },
   { label: 'Import BOM', path: '/bom-import', icon: Table2 },
   { label: 'WIP Compare', path: '/wip-compare', icon: GitCompareArrows },
+  { label: 'Import Job History', path: '/foundation-history-import', icon: FileSearch },
 ]
 
 export default function Shell({ session, children }) {
