@@ -51,6 +51,26 @@ export default function JobDetail() {
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
+    async function fetchAllFoundationCosts() {
+      // PostgREST max-rows is a hard ceiling — paginate to get all rows
+      const PAGE = 1000
+      let all = []
+      let from = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from('foundation_costs')
+          .select('*')
+          .eq('job_id', id)
+          .order('cost_date')
+          .range(from, from + PAGE - 1)
+        if (error || !data?.length) break
+        all = [...all, ...data]
+        if (data.length < PAGE) break
+        from += PAGE
+      }
+      return all
+    }
+
     async function load() {
       const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
@@ -64,7 +84,7 @@ export default function JobDetail() {
         supabase.from('daily_reports').select('*').eq('job_id', id).order('report_date', { ascending: false }),
         supabase.from('inventory_transactions').select('*, item:inventory_items(description, part_number, unit, unit_cost)').eq('job_id', id).eq('txn_type', 'issue').order('txn_date', { ascending: false }),
         supabase.from('inventory_serials').select('id, serial_number, issue_txn_id').eq('job_id', id).eq('status', 'installed'),
-        supabase.from('foundation_costs').select('*').eq('job_id', id).order('cost_date').limit(10000),
+        fetchAllFoundationCosts(),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -77,7 +97,7 @@ export default function JobDetail() {
       setDailyReports(dr.data || [])
       setInvTxns(it.data || [])
       setInvSerials(is_.data || [])
-      setFoundationCosts(fc.data || [])
+      setFoundationCosts(fc || [])
       setLoading(false)
     }
     load()
@@ -110,6 +130,7 @@ export default function JobDetail() {
 
   const postedInvoicesTotal = invoices.filter(inv => inv.foundation_status === 'Posted in Foundation').reduce((s, inv) => s + (inv.amount || 0), 0)
 
+  const glTotal    = foundationCosts.reduce((s,r) => s + (r.dollars||0), 0)
   const glLabor    = foundationCosts.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
   const glSub      = foundationCosts.filter(r => r.class === 'SUB').reduce((s,r) => s + (r.dollars||0), 0)
   const glTravel   = foundationCosts.filter(r => ['TRV','MLS','PER'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
@@ -394,7 +415,7 @@ export default function JobDetail() {
           <div className="cost-box-sub">
             {approvedCOCost > 0
               ? `Base ${fmt.currency(job.estimated_cost)} + CO ${fmt.currency(approvedCOCost)}`
-              : `JTD Cost: ${fmt.currency(job.jtd_cost)}`}
+              : glTotal > 0 ? `JTD Cost: ${fmt.currency(glTotal)}` : `WIP JTD: ${fmt.currency(job.jtd_cost)}`}
           </div>
         </div>
         <div className={`cost-box ${variance < -5000 ? 'alert' : ''}`}>
@@ -478,7 +499,7 @@ export default function JobDetail() {
           <div className="cost-box">
             <div className="cost-box-label">GL Total</div>
             <div className="cost-box-value" style={{ color: 'var(--color-success)' }}>
-              {fmt.currency(foundationCosts.reduce((s,r) => s + (r.dollars||0), 0))}
+              {fmt.currency(glTotal)}
             </div>
             <div className="cost-box-sub">{foundationCosts.length.toLocaleString()} GL transactions</div>
           </div>
