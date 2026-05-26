@@ -51,6 +51,11 @@ export default function JobDetail() {
   const [confirmLockCosts, setConfirmLockCosts] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [correctionModal, setCorrectionModal] = useState(null)
+  const [correctionForm, setCorrectionForm] = useState({ correctionType: 'cost_move', destJobId: '', amount: '', note: '' })
+  const [allJobs, setAllJobs] = useState([])
+  const [actionLog, setActionLog] = useState([])
+  const [currentUserEmail, setCurrentUserEmail] = useState('')
 
   useEffect(() => {
     async function fetchAllFoundationCosts() {
@@ -74,7 +79,7 @@ export default function JobDetail() {
     }
 
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -87,6 +92,8 @@ export default function JobDetail() {
         supabase.from('inventory_transactions').select('*, item:inventory_items(description, part_number, unit, unit_cost)').eq('job_id', id).eq('txn_type', 'issue').order('txn_date', { ascending: false }),
         supabase.from('inventory_serials').select('id, serial_number, issue_txn_id').eq('job_id', id).eq('status', 'installed'),
         fetchAllFoundationCosts(),
+        supabase.from('job_action_log').select('*').eq('job_id', id).order('created_at', { ascending: false }),
+        supabase.auth.getUser(),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -100,6 +107,8 @@ export default function JobDetail() {
       setInvTxns(it.data || [])
       setInvSerials(is_.data || [])
       setFoundationCosts(fc || [])
+      setActionLog(log.data || [])
+      setCurrentUserEmail(user.data?.user?.email || '')
       setLoading(false)
     }
     load()
@@ -143,6 +152,9 @@ export default function JobDetail() {
   const forecastGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
   const actualGLGM = glTotal > 0 ? gmPct(revisedRevenue, glTotal) : null
 
+  const correctedGLIds = new Set(actionLog.filter(l => l.foundation_cost_id).map(l => l.foundation_cost_id))
+  const correctedBillingIds = new Set(actionLog.filter(l => l.billing_id).map(l => l.billing_id))
+
   const totalBilled = billings.reduce((s, b) => s + (b.amount || 0), 0)
   const leftToBill = revisedRevenue - totalBilled
 
@@ -156,18 +168,58 @@ export default function JobDetail() {
     setUncommitted(prev => prev.filter(u => u.id !== ucId))
   }
 
-  function flagGLRow(row) {
-    const subject = encodeURIComponent(`GL Correction Request — Job ${job.job_number} — ${row.cost_date} ${row.class} ${fmt.currency(row.dollars)}`)
-    const body = encodeURIComponent(
-      `Hello,\n\nI am requesting a correction for the following GL transaction on Job ${job.job_number}:\n\n` +
-      `Date: ${row.cost_date}\n` +
-      `Class: ${row.class} — ${row.cost_code_desc || row.cost_code}\n` +
-      `Amount: ${fmt.currency(row.dollars)}\n` +
-      (row.hours > 0 ? `Hours: ${row.hours.toFixed(2)}\n` : '') +
-      (row.comment ? `Description: ${row.comment}\n` : '') +
-      `\nReason for correction: [please describe]\n\nThank you`
-    )
-    window.open(`mailto:${AP_EMAIL}?subject=${subject}&body=${body}`)
+  async function openCorrectionModal(type, row) {
+    if (!allJobs.length) {
+      const { data } = await supabase.from('jobs').select('id, job_number, job_description').order('job_number')
+      setAllJobs(data || [])
+    }
+    setCorrectionForm({ correctionType: 'cost_move', destJobId: '', amount: String(row.dollars ?? row.amount ?? ''), note: '' })
+    setCorrectionModal({ type, row })
+  }
+
+  async function submitCorrection() {
+    const { type, row } = correctionModal
+    const isGL = type === 'gl'
+    const destJob = allJobs.find(j => j.id === correctionForm.destJobId)
+
+    await supabase.from('job_action_log').insert({
+      job_id: id,
+      action_type: isGL ? 'gl_correction' : 'billing_request',
+      correction_type: correctionForm.correctionType,
+      created_by_email: currentUserEmail,
+      note: correctionForm.note || null,
+      source_amount: isGL ? row.dollars : row.amount,
+      source_description: isGL ? (row.cost_code_desc || row.cost_code) : (row.description || row.billing_number),
+      foundation_cost_id: isGL ? row.id : null,
+      billing_id: !isGL ? row.id : null,
+      dest_job_id: correctionForm.destJobId || null,
+      dest_job_number: destJob?.job_number || null,
+    })
+
+    const { data: logData } = await supabase.from('job_action_log').select('*').eq('job_id', id).order('created_at', { ascending: false })
+    setActionLog(logData || [])
+    setCorrectionModal(null)
+
+    const toEmail = isGL ? AP_EMAIL : 'ar@tuscoinc.com'
+    const isCostMove = correctionForm.correctionType === 'cost_move' && destJob
+    let bodyLines = [
+      'Hello,', '',
+      isGL
+        ? `I am requesting a GL correction for the following transaction on Job ${job.job_number}:`
+        : `I am requesting a billing correction for Job ${job.job_number}:`,
+      '',
+      isGL
+        ? `  Date: ${row.cost_date}\n  Class: ${row.class} — ${row.cost_code_desc || row.cost_code}\n  Amount: ${fmt.currency(row.dollars)}${row.hours > 0 ? `\n  Hours: ${row.hours.toFixed(2)}` : ''}${row.comment ? `\n  Description: ${row.comment}` : ''}`
+        : `  Billing #: ${row.billing_number}\n  Amount: ${fmt.currency(row.amount)}\n  Date Submitted: ${row.date_submitted}`,
+    ]
+    if (isCostMove) bodyLines = [...bodyLines, '', 'Please move this cost to:', `  Job: ${destJob.job_number} — ${destJob.job_description}`, `  Amount to move: ${fmt.currency(correctionForm.amount)}`]
+    if (correctionForm.note) bodyLines = [...bodyLines, '', `Notes: ${correctionForm.note}`]
+    bodyLines = [...bodyLines, '', 'Thank you,', '']
+
+    const subject = isGL
+      ? `GL Correction Request — Job ${job.job_number} — ${row.cost_date} ${fmt.currency(row.dollars)}`
+      : `Billing Correction Request — Job ${job.job_number} — ${fmt.currency(row.amount)}`
+    window.open(`mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines.join('\n'))}`)
   }
 
   async function setJobStatus(status) {
@@ -555,6 +607,9 @@ export default function JobDetail() {
         </button>
         <button className={`tab ${activeTab==='gl-history'?'active':''}`} onClick={() => setActiveTab('gl-history')}>
           <Database size={12} style={{ marginRight: 4 }} />GL History {foundationCosts.length > 0 ? `(${foundationCosts.length})` : ''}
+        </button>
+        <button className={`tab ${activeTab==='activity'?'active':''}`} onClick={() => setActiveTab('activity')}>
+          Activity{actionLog.length > 0 ? ` (${actionLog.length})` : ''}
         </button>
       </div>
 
@@ -1074,7 +1129,19 @@ export default function JobDetail() {
                         <td style={{ fontSize:12, color:'var(--color-text-3)' }}>{fmt.date(b.date_approved)}</td>
                         <td className="text-right fw-500">{fmt.currency(b.amount)}</td>
                         <td>{billingBadge(b.status)}</td>
-                        <td><button className="btn btn-sm" onClick={() => navigate(`/billing-entry?edit=${b.id}&job=${id}`)}><Pencil size={11} /></button></td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn btn-sm" onClick={() => navigate(`/billing-entry?edit=${b.id}&job=${id}`)}><Pencil size={11} /></button>
+                          <button className="btn btn-sm" title="Request billing correction"
+                            onClick={e => { e.stopPropagation(); openCorrectionModal('billing', b) }}
+                            style={{ color: 'var(--color-warning)', marginLeft: 4 }}>
+                            <Flag size={11} />
+                          </button>
+                          {correctedBillingIds.has(b.id) && (
+                            <span style={{ fontSize: 10, background: 'var(--color-warning)', color: '#fff', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>
+                              Filed
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                     <tr style={{ background:'var(--color-sidebar)', fontWeight:500 }}>
@@ -1405,12 +1472,17 @@ export default function JobDetail() {
                                 {r.hours ? r.hours.toFixed(2) : '—'}
                               </td>
                               <td className="text-right fw-500">{fmt.currency(r.dollars)}</td>
-                              <td style={{ width: 32 }}>
-                                <button className="btn btn-sm" title="Flag for correction"
-                                  onClick={e => { e.stopPropagation(); flagGLRow(r) }}
+                              <td style={{ width: 80, whiteSpace: 'nowrap' }}>
+                                <button className="btn btn-sm" title="Request correction"
+                                  onClick={e => { e.stopPropagation(); openCorrectionModal('gl', r) }}
                                   style={{ color: 'var(--color-warning)', padding: '2px 4px' }}>
                                   <Flag size={11} />
                                 </button>
+                                {correctedGLIds.has(r.id) && (
+                                  <span style={{ fontSize: 10, background: 'var(--color-warning)', color: '#fff', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>
+                                    Filed
+                                  </span>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -1433,7 +1505,102 @@ export default function JobDetail() {
         )
       })()}
 
+      {/* Activity Log */}
+      {activeTab === 'activity' && (
+        <div className="tab-content">
+          {actionLog.length === 0
+            ? <div className="empty-state"><p>No correction or billing requests logged yet.</p></div>
+            : <div className="card"><div className="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th>Date</th><th>Type</th><th>Submitted By</th><th>Details</th>
+                    <th className="text-right">Amount</th><th>Destination Job</th>
+                  </tr></thead>
+                  <tbody>
+                    {actionLog.map(l => (
+                      <tr key={l.id}>
+                        <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmt.date(l.created_at)}</td>
+                        <td>
+                          <span className={`badge ${l.action_type === 'gl_correction' ? 'badge-blue' : 'badge-green'}`}>
+                            {l.action_type === 'gl_correction' ? 'GL Correction' : 'Billing Request'}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 12 }}>{l.created_by_email || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--color-text-2)', maxWidth: 260 }}>
+                          {l.correction_type && <div style={{ fontSize: 11, color: 'var(--color-text-3)', textTransform: 'capitalize' }}>{l.correction_type.replace(/_/g, ' ')}</div>}
+                          <div>{l.source_description}</div>
+                          {l.note && <div style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{l.note}</div>}
+                        </td>
+                        <td className="text-right" style={{ fontSize: 12 }}>{l.source_amount ? fmt.currency(l.source_amount) : '—'}</td>
+                        <td style={{ fontSize: 12 }}>{l.dest_job_number || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div></div>
+          }
+        </div>
+      )}
+
       </div>
+
+      {/* Correction / Billing Request Modal */}
+      {correctionModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 12, padding: 24, width: 480, maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>
+              {correctionModal.type === 'gl' ? 'Request GL Correction' : 'Request Billing Correction'}
+            </div>
+            <div style={{ background: 'var(--color-sidebar)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--color-text-2)', marginBottom: 16 }}>
+              {correctionModal.type === 'gl'
+                ? `${correctionModal.row.cost_date} · ${correctionModal.row.class} · ${correctionModal.row.cost_code_desc || correctionModal.row.cost_code} · ${fmt.currency(correctionModal.row.dollars)}`
+                : `Billing #${correctionModal.row.billing_number} · ${fmt.currency(correctionModal.row.amount)} · ${fmt.date(correctionModal.row.date_submitted)}`
+              }
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4 }}>Correction Type</label>
+              <select value={correctionForm.correctionType}
+                onChange={e => setCorrectionForm(f => ({ ...f, correctionType: e.target.value }))}
+                style={{ width: '100%' }}>
+                <option value="cost_move">Cost move to another job</option>
+                <option value="wrong_department">Wrong department / cost code</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            {correctionForm.correctionType === 'cost_move' && (
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4 }}>Destination Job</label>
+                  <select value={correctionForm.destJobId}
+                    onChange={e => setCorrectionForm(f => ({ ...f, destJobId: e.target.value }))}
+                    style={{ width: '100%' }}>
+                    <option value="">— Select destination job —</option>
+                    {allJobs.filter(j => j.id !== id).map(j => (
+                      <option key={j.id} value={j.id}>{j.job_number} — {j.job_description}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4 }}>Amount to Move</label>
+                  <input type="number" value={correctionForm.amount}
+                    onChange={e => setCorrectionForm(f => ({ ...f, amount: e.target.value }))}
+                    style={{ width: '100%' }} />
+                </div>
+              </>
+            )}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 4 }}>Note (optional)</label>
+              <textarea value={correctionForm.note}
+                onChange={e => setCorrectionForm(f => ({ ...f, note: e.target.value }))}
+                rows={3} style={{ width: '100%', resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => setCorrectionModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitCorrection}>Submit &amp; Open Email</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
