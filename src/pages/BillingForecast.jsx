@@ -213,6 +213,23 @@ export default function Forecast() {
     }
   })
 
+  // Pass C — uninvoiced line items without estimated_ship_date → fall back to PO expected_invoice_date
+  const poById = {}
+  pos.forEach(p => { poById[p.id] = p })
+  poLineItems.forEach(li => {
+    if (!li.invoiced && !li.estimated_ship_date && li.purchase_orders?.job_id) {
+      const po = poById[li.purchase_orders?.id]
+      if (!po?.expected_invoice_date) return
+      const m = po.expected_invoice_date.slice(0, 7)
+      const jid = li.purchase_orders.job_id
+      const amt = (parseFloat(li.qty) || 0) * (parseFloat(li.price_each) || 0)
+      if (amt > 0) {
+        if (!autoForecastByJobMonth[jid]) autoForecastByJobMonth[jid] = {}
+        autoForecastByJobMonth[jid][m] = (autoForecastByJobMonth[jid][m] || 0) + amt
+      }
+    }
+  })
+
   // Actual costs — posted uncommitted + invoiced PO lines, by job+month
   const actualCostsByJobMonth = {}
   uncommitted.forEach(u => {
