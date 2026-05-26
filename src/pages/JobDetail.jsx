@@ -64,7 +64,7 @@ export default function JobDetail() {
         supabase.from('daily_reports').select('*').eq('job_id', id).order('report_date', { ascending: false }),
         supabase.from('inventory_transactions').select('*, item:inventory_items(description, part_number, unit, unit_cost)').eq('job_id', id).eq('txn_type', 'issue').order('txn_date', { ascending: false }),
         supabase.from('inventory_serials').select('id, serial_number, issue_txn_id').eq('job_id', id).eq('status', 'installed'),
-        supabase.from('foundation_costs').select('*').eq('job_id', id).order('cost_date'),
+        supabase.from('foundation_costs').select('*').eq('job_id', id).order('cost_date').limit(10000),
       ])
       setJob(j.data)
       setPOs(p.data || [])
