@@ -109,7 +109,13 @@ export default function JobDetail() {
   const variance = revisedCost - trackedTotal
 
   const postedInvoicesTotal = invoices.filter(inv => inv.foundation_status === 'Posted in Foundation').reduce((s, inv) => s + (inv.amount || 0), 0)
-  const postedLaborTotal = uncommitted.filter(u => u.category === 'Labor — Hours × Rate' && u.posted).reduce((s, u) => s + (u.amount || 0), 0)
+
+  const glLabor    = foundationCosts.filter(r => ['LAB','LPM'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
+  const glSub      = foundationCosts.filter(r => r.class === 'SUB').reduce((s,r) => s + (r.dollars||0), 0)
+  const glTravel   = foundationCosts.filter(r => ['TRV','MLS','PER'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
+  const glFuel     = foundationCosts.filter(r => r.class === 'ENE').reduce((s,r) => s + (r.dollars||0), 0)
+  const glRentedEq = foundationCosts.filter(r => r.class === 'REQ').reduce((s,r) => s + (r.dollars||0), 0)
+  const glLaborHours = foundationCosts.filter(r => ['LAB','LPM'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
   const estGM = gmPct(revisedRevenue, revisedCost)
   const actualGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
 
@@ -119,6 +125,11 @@ export default function JobDetail() {
   async function togglePosted(ucId, current) {
     setUncommitted(prev => prev.map(u => u.id === ucId ? { ...u, posted: !current } : u))
     await supabase.from('uncommitted_costs').update({ posted: !current }).eq('id', ucId)
+  }
+
+  async function deleteUncommitted(ucId) {
+    await supabase.from('uncommitted_costs').delete().eq('id', ucId)
+    setUncommitted(prev => prev.filter(u => u.id !== ucId))
   }
 
   async function setJobStatus(status) {
@@ -426,13 +437,53 @@ export default function JobDetail() {
           <div className="cost-box-sub">Confirmed in Foundation</div>
         </div>
         <div className="cost-box">
-          <div className="cost-box-label">Posted Labor</div>
-          <div className="cost-box-value" style={{ color: postedLaborTotal > 0 ? 'var(--color-success)' : 'inherit' }}>
-            {fmt.currency(postedLaborTotal)}
+          <div className="cost-box-label">GL Labor</div>
+          <div className="cost-box-value" style={{ color: glLabor > 0 ? 'var(--color-success)' : 'inherit' }}>
+            {fmt.currency(glLabor)}
           </div>
-          <div className="cost-box-sub">Labor confirmed in Foundation</div>
+          <div className="cost-box-sub">{glLaborHours > 0 ? `${glLaborHours.toFixed(1)} hrs posted` : 'From GL History import'}</div>
         </div>
       </div>
+
+      {foundationCosts.length > 0 && (
+        <div className="cost-breakdown-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginTop: 0 }}>
+          <div className="cost-box">
+            <div className="cost-box-label">GL Subcontractor</div>
+            <div className="cost-box-value" style={{ color: glSub > 0 ? 'var(--color-success)' : 'inherit' }}>
+              {fmt.currency(glSub)}
+            </div>
+            <div className="cost-box-sub">Posted subcontractor</div>
+          </div>
+          <div className="cost-box">
+            <div className="cost-box-label">GL Travel</div>
+            <div className="cost-box-value" style={{ color: glTravel > 0 ? 'var(--color-success)' : 'inherit' }}>
+              {fmt.currency(glTravel)}
+            </div>
+            <div className="cost-box-sub">Per diem, mileage, travel</div>
+          </div>
+          <div className="cost-box">
+            <div className="cost-box-label">GL Fuel</div>
+            <div className="cost-box-value" style={{ color: glFuel > 0 ? 'var(--color-success)' : 'inherit' }}>
+              {fmt.currency(glFuel)}
+            </div>
+            <div className="cost-box-sub">Posted fuel charges</div>
+          </div>
+          <div className="cost-box">
+            <div className="cost-box-label">GL Rented Equipment</div>
+            <div className="cost-box-value" style={{ color: glRentedEq > 0 ? 'var(--color-success)' : 'inherit' }}>
+              {fmt.currency(glRentedEq)}
+            </div>
+            <div className="cost-box-sub">Posted equipment rental</div>
+          </div>
+          <div className="cost-box">
+            <div className="cost-box-label">GL Total</div>
+            <div className="cost-box-value" style={{ color: 'var(--color-success)' }}>
+              {fmt.currency(foundationCosts.reduce((s,r) => s + (r.dollars||0), 0))}
+            </div>
+            <div className="cost-box-sub">{foundationCosts.length.toLocaleString()} GL transactions</div>
+          </div>
+        </div>
+      )}
 
       <div className="tabs">
         <button className={`tab ${activeTab==='pos'?'active':''}`} onClick={() => setActiveTab('pos')}>
@@ -655,7 +706,13 @@ export default function JobDetail() {
                               : <span className="badge badge-amber">Not Posted</span>}
                           </button>
                         </td>
-                        <td><button className="btn btn-sm" onClick={() => navigate(`/uncommitted?edit=${u.id}&job=${id}`)}><Pencil size={11} /></button></td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn btn-sm" onClick={() => navigate(`/uncommitted?edit=${u.id}&job=${id}`)}><Pencil size={11} /></button>
+                          <button className="btn btn-sm" style={{ color: 'var(--color-danger)', marginLeft: 4 }}
+                            onClick={() => { if (window.confirm('Delete this uncommitted cost entry?')) deleteUncommitted(u.id) }}>
+                            <Trash2 size={11} />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                     <tr>
