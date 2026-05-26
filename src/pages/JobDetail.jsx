@@ -110,12 +110,12 @@ export default function JobDetail() {
 
   const postedInvoicesTotal = invoices.filter(inv => inv.foundation_status === 'Posted in Foundation').reduce((s, inv) => s + (inv.amount || 0), 0)
 
-  const glLabor    = foundationCosts.filter(r => ['LAB','LPM'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
+  const glLabor    = foundationCosts.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
   const glSub      = foundationCosts.filter(r => r.class === 'SUB').reduce((s,r) => s + (r.dollars||0), 0)
   const glTravel   = foundationCosts.filter(r => ['TRV','MLS','PER'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
   const glFuel     = foundationCosts.filter(r => r.class === 'ENE').reduce((s,r) => s + (r.dollars||0), 0)
   const glRentedEq = foundationCosts.filter(r => r.class === 'REQ').reduce((s,r) => s + (r.dollars||0), 0)
-  const glLaborHours = foundationCosts.filter(r => ['LAB','LPM'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
+  const glLaborHours = foundationCosts.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
   const estGM = gmPct(revisedRevenue, revisedCost)
   const actualGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
 
