@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
-import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database } from 'lucide-react'
+import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database, Flag } from 'lucide-react'
+
+const AP_EMAIL = 'corrections@tuscoinc.com'
 
 const GL_CLASS_GROUPS = [
   { label: 'Labor',            codes: ['LAB', 'LPM'] },
@@ -138,7 +140,8 @@ export default function JobDetail() {
   const glRentedEq = foundationCosts.filter(r => r.class === 'REQ').reduce((s,r) => s + (r.dollars||0), 0)
   const glLaborHours = foundationCosts.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
   const estGM = gmPct(revisedRevenue, revisedCost)
-  const actualGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
+  const forecastGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
+  const actualGLGM = glTotal > 0 ? gmPct(revisedRevenue, glTotal) : null
 
   const totalBilled = billings.reduce((s, b) => s + (b.amount || 0), 0)
   const leftToBill = revisedRevenue - totalBilled
@@ -151,6 +154,20 @@ export default function JobDetail() {
   async function deleteUncommitted(ucId) {
     await supabase.from('uncommitted_costs').delete().eq('id', ucId)
     setUncommitted(prev => prev.filter(u => u.id !== ucId))
+  }
+
+  function flagGLRow(row) {
+    const subject = encodeURIComponent(`GL Correction Request — Job ${job.job_number} — ${row.cost_date} ${row.class} ${fmt.currency(row.dollars)}`)
+    const body = encodeURIComponent(
+      `Hello,\n\nI am requesting a correction for the following GL transaction on Job ${job.job_number}:\n\n` +
+      `Date: ${row.cost_date}\n` +
+      `Class: ${row.class} — ${row.cost_code_desc || row.cost_code}\n` +
+      `Amount: ${fmt.currency(row.dollars)}\n` +
+      (row.hours > 0 ? `Hours: ${row.hours.toFixed(2)}\n` : '') +
+      (row.comment ? `Description: ${row.comment}\n` : '') +
+      `\nReason for correction: [please describe]\n\nThank you`
+    )
+    window.open(`mailto:${AP_EMAIL}?subject=${subject}&body=${body}`)
   }
 
   async function setJobStatus(status) {
@@ -419,12 +436,12 @@ export default function JobDetail() {
           </div>
         </div>
         <div className={`cost-box ${variance < -5000 ? 'alert' : ''}`}>
-          <div className="cost-box-label">Tracked vs Budget Variance</div>
+          <div className="cost-box-label">Forecast vs Budget</div>
           <div className={`cost-box-value ${variance < 0 ? 'text-danger' : variance > 0 ? 'text-success' : ''}`}>
             {trackedTotal > 0 ? (variance >= 0 ? '+' : '') + fmt.currency(variance) : '—'}
           </div>
           <div className="cost-box-sub">
-            Tracked: {fmt.currency(trackedTotal)}
+            Forecast: {fmt.currency(trackedTotal)}
             {trackedDirectInv > 0 ? ` · Direct Inv: ${fmt.currency(trackedDirectInv)}` : ''}
           </div>
         </div>
@@ -432,7 +449,9 @@ export default function JobDetail() {
           <div className="cost-box-label">Est GM%</div>
           <div className="cost-box-value">{gmCell(estGM)}</div>
           <div className="cost-box-sub">
-            {actualGM != null ? <>Actual: {gmCell(actualGM, estGM)}</> : 'No tracked cost yet'}
+            {actualGLGM != null
+              ? <>Actual (GL): {gmCell(actualGLGM, estGM)}{forecastGM != null ? <> · Forecast: {gmCell(forecastGM, estGM)}</> : null}</>
+              : forecastGM != null ? <>Forecast: {gmCell(forecastGM, estGM)}</> : 'No cost data yet'}
           </div>
         </div>
         {/* Row 2: Billing & Foundation */}
@@ -1364,6 +1383,7 @@ export default function JobDetail() {
                             <th>Category</th>
                             <th className="text-right">Hours</th>
                             <th className="text-right">Dollars</th>
+                            <th></th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1385,6 +1405,13 @@ export default function JobDetail() {
                                 {r.hours ? r.hours.toFixed(2) : '—'}
                               </td>
                               <td className="text-right fw-500">{fmt.currency(r.dollars)}</td>
+                              <td style={{ width: 32 }}>
+                                <button className="btn btn-sm" title="Flag for correction"
+                                  onClick={e => { e.stopPropagation(); flagGLRow(r) }}
+                                  style={{ color: 'var(--color-warning)', padding: '2px 4px' }}>
+                                  <Flag size={11} />
+                                </button>
+                              </td>
                             </tr>
                           ))}
                           <tr style={{ background: 'var(--color-sidebar)', fontWeight: 500 }}>
@@ -1393,6 +1420,7 @@ export default function JobDetail() {
                             </td>
                             <td className="text-right">{totalHours > 0 ? totalHours.toFixed(2) : '—'}</td>
                             <td className="text-right fw-500">{fmt.currency(totalDollars)}</td>
+                            <td></td>
                           </tr>
                         </tbody>
                       </table>

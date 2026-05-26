@@ -13,6 +13,7 @@ export default function Jobs() {
   const [billings, setBillings] = useState([])
   const [cos, setCOs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [glByJob, setGlByJob] = useState({})
   const [search, setSearch] = useState('')
   const [filterPM, setFilterPM] = useState('')
   const [filterType, setFilterType] = useState('')
@@ -21,13 +22,14 @@ export default function Jobs() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, bil, co] = await Promise.all([
+      const [j, p, inv, uc, bil, co, gl] = await Promise.all([
         supabase.from('jobs').select('*').order('job_number'),
         supabase.from('purchase_orders').select('id, job_id, amount'),
         supabase.from('invoices').select('job_id, amount, po_id'),
         supabase.from('uncommitted_costs').select('job_id, amount'),
         supabase.from('billings').select('job_id, amount'),
         supabase.from('change_orders').select('job_id, revenue_amount, cost_amount, status'),
+        supabase.from('gl_totals_by_job').select('job_id, gl_total'),
       ])
       setJobs(j.data || [])
       setPOs(p.data || [])
@@ -35,6 +37,9 @@ export default function Jobs() {
       setUncommitted(uc.data || [])
       setBillings(bil.data || [])
       setCOs(co.data || [])
+      const glMap = {}
+      gl.data?.forEach(r => { glMap[r.job_id] = r.gl_total || 0 })
+      setGlByJob(glMap)
       setLoading(false)
     }
     load()
@@ -67,10 +72,12 @@ export default function Jobs() {
     const revisedCost = (j.estimated_cost || 0) + (coCostByJob[j.id] || 0)
     const variance = revisedCost - tracked
     const estGM = gmPct(revisedRevenue, revisedCost)
-    const actualGM = tracked > 0 ? gmPct(revisedRevenue, tracked) : null
+    const forecastGM = tracked > 0 ? gmPct(revisedRevenue, tracked) : null
+    const glCost = glByJob[j.id] || 0
+    const actualGLGM = glCost > 0 ? gmPct(revisedRevenue, glCost) : null
     const billed = billedByJob[j.id] || 0
     const leftToBill = revisedRevenue - billed
-    return { ...j, tracked, variance, estGM, actualGM, billed, leftToBill, revisedRevenue, revisedCost }
+    return { ...j, tracked, glCost, variance, estGM, forecastGM, actualGLGM, billed, leftToBill, revisedRevenue, revisedCost }
   }).filter(j => {
     if (!showCompleted && j.status === 'Complete') return false
     if (showCompleted && j.status !== 'Complete') return false
@@ -129,8 +136,9 @@ export default function Jobs() {
                 <th className="text-right">Est. Revenue</th>
                 <th className="text-right">Est. Cost</th>
                 <th className="text-right">Est GM%</th>
-                <th className="text-right">Tracked Cost</th>
-                <th className="text-right">Actual GM%</th>
+                <th className="text-right">Forecast Cost</th>
+                <th className="text-right">Forecast GM%</th>
+                <th className="text-right">Actual GM% (GL)</th>
                 <th className="text-right">Billed to Date</th>
                 <th className="text-right">Left to Bill</th>
                 <th className="text-right">Variance</th>
@@ -138,7 +146,7 @@ export default function Jobs() {
               </tr></thead>
               <tbody>
                 {filtered.length === 0
-                  ? <tr><td colSpan={14} style={{ textAlign:'center', color:'var(--color-text-3)', padding:32 }}>No jobs found.</td></tr>
+                  ? <tr><td colSpan={15} style={{ textAlign:'center', color:'var(--color-text-3)', padding:32 }}>No jobs found.</td></tr>
                   : filtered.map(j => (
                     <tr key={j.id} className="clickable" onClick={() => navigate(`/jobs/${j.id}`)}>
                       <td className="fw-500">{j.job_number}</td>
@@ -158,7 +166,8 @@ export default function Jobs() {
                       <td className="text-right">{fmt.currency(j.revisedCost)}</td>
                       <td className="text-right">{gmCell(j.estGM)}</td>
                       <td className="text-right">{j.tracked > 0 ? fmt.currency(j.tracked) : <span className="text-muted">—</span>}</td>
-                      <td className="text-right">{gmCell(j.actualGM, j.estGM)}</td>
+                      <td className="text-right">{gmCell(j.forecastGM, j.estGM)}</td>
+                      <td className="text-right">{j.actualGLGM != null ? gmCell(j.actualGLGM, j.estGM) : <span className="text-muted">—</span>}</td>
                       <td className="text-right fw-500" style={{ color: j.billed > 0 ? 'var(--color-primary)' : undefined }}>
                         {j.billed > 0 ? fmt.currency(j.billed) : <span className="text-muted">—</span>}
                       </td>
