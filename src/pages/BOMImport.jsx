@@ -5,37 +5,22 @@ import { fmt } from '../lib/utils'
 import { FileText, Download, ChevronDown, ChevronUp } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
-const CATEGORIES = ['Material — Hardware', 'Material — Cabling', 'Subcontractor', 'Equipment Rental', 'Other']
-
 function parseBOMFile(data) {
   const wb = XLSX.read(data, { type: 'binary', cellDates: true })
   const sheet = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
   const items = []
-  for (const row of rows) {
-    const vendor = String(row[0] || '').trim()
-    const partNumber = String(row[1] || '').trim()
-    const description = String(row[2] || '').trim()
-    const qty = parseFloat(row[3]) || 0
-    const priceEach = parseFloat(row[4]) || 0
-    const rawCat = String(row[5] || '').trim()
-    const category = CATEGORIES.includes(rawCat) ? rawCat : 'Material — Hardware'
-    let estShipDate = null
-    if (row[6]) {
-      if (row[6] instanceof Date && !isNaN(row[6])) {
-        const mm = String(row[6].getMonth() + 1).padStart(2, '0')
-        const dd = String(row[6].getDate()).padStart(2, '0')
-        estShipDate = `${row[6].getFullYear()}-${mm}-${dd}`
-      } else {
-        const s = String(row[6]).trim()
-        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) estShipDate = s
-      }
-    }
-    // Skip header rows and rows missing required fields
-    const vendorLower = vendor.toLowerCase()
-    if (!vendor || !description || qty <= 0 ||
-        vendorLower === 'vendor' || vendorLower === 'supplier' || vendorLower === 'vendor / supplier') continue
-    items.push({ vendor, partNumber, description, qty, priceEach, category, estShipDate })
+  // Rows 1-8 are BOM header / column-header rows — skip; data starts at row 9 (index 8)
+  for (const row of rows.slice(8)) {
+    const qty = parseFloat(row[0]) || 0
+    const description = String(row[1] || '').trim()
+    const manufacturer = String(row[2] || '').trim()
+    const vendor = String(row[3] || '').trim()
+    const partNumber = String(row[4] || '').trim()
+    const uom = String(row[5] || '').trim()
+    const priceEach = parseFloat(row[6]) || 0
+    if (!vendor || !description || qty <= 0) continue
+    items.push({ qty, description, manufacturer, vendor, partNumber, uom, priceEach })
   }
   return items
 }
@@ -45,19 +30,20 @@ function vendorSlug(name) {
 }
 
 function downloadTemplate() {
-  const headers = ['Vendor / Supplier', 'Part Number', 'Description', 'Qty', 'Unit Price', 'Category', 'Est. Ship Date (YYYY-MM-DD)']
-  const sample = [
-    ['Anixter', 'CAT6-1000BL', 'Cat6 Cable 1000ft Blue', 4, 185.00, 'Material — Cabling', ''],
-    ['Anixter', 'PATCH-CAT6-3', 'Cat6 Patch Cable 3ft Gray', 50, 4.50, 'Material — Cabling', ''],
-    ['Anixter', 'KEYSTONE-CAT6', 'Cat6 Keystone Jack White', 100, 2.10, 'Material — Hardware', ''],
-    ['Home Depot', 'EMT-050', 'EMT Conduit 1/2" 10ft', 20, 4.25, 'Material — Hardware', '2026-06-15'],
-    ['Home Depot', 'STRP-050', '1/2" One-Hole Strap', 200, 0.35, 'Material — Hardware', '2026-06-15'],
-    ['Home Depot', 'LB-050', '1/2" LB Conduit Body', 10, 3.20, 'Material — Hardware', '2026-06-15'],
-    ['Graybar', 'PANEL-24P', '24-Port Patch Panel Cat6', 2, 95.00, 'Material — Hardware', ''],
-    ['Graybar', 'SWITCH-24G', '24-Port Gigabit Switch', 1, 320.00, 'Equipment Rental', ''],
+  const headerRows = [
+    ['Bill of Materials'], [], [], [], [], [], [],
+    ['QTY', 'Name', 'Manufacturer', 'Supplier', 'Part Number', 'UOM', 'Item Cost', 'Total Cost'],
   ]
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...sample])
-  ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 32 }, { wch: 6 }, { wch: 10 }, { wch: 22 }, { wch: 28 }]
+  const sample = [
+    [4,   'Cat6 Cable 1000ft Blue',    'Belden',   'Anixter',    'CAT6-1000BL',   'EA', 185.00, 740.00],
+    [50,  'Cat6 Patch Cable 3ft Gray', 'Belden',   'Anixter',    'PATCH-CAT6-3',  'EA',   4.50, 225.00],
+    [100, 'Cat6 Keystone Jack White',  'Leviton',  'Anixter',    'KEYSTONE-CAT6', 'EA',   2.10, 210.00],
+    [20,  'EMT Conduit 1/2" 10ft',     '',         'Home Depot', 'EMT-050',       'EA',   4.25,  85.00],
+    [2,   '24-Port Patch Panel Cat6',  'Panduit',  'Graybar',    'PANEL-24P',     'EA',  95.00, 190.00],
+    [1,   '24-Port Gigabit Switch',    'Cisco',    'Graybar',    'SWITCH-24G',    'EA', 320.00, 320.00],
+  ]
+  const ws = XLSX.utils.aoa_to_sheet([...headerRows, ...sample])
+  ws['!cols'] = [{ wch: 6 }, { wch: 32 }, { wch: 16 }, { wch: 20 }, { wch: 16 }, { wch: 6 }, { wch: 10 }, { wch: 10 }]
   const wbOut = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wbOut, ws, 'BOM')
   XLSX.writeFile(wbOut, 'bom-template.xlsx')
@@ -84,7 +70,6 @@ export default function BOMImport() {
       .then(({ data }) => setJobs(data || []))
   }, [])
 
-  // Auto-set prefix when job changes
   useEffect(() => {
     if (jobId) {
       const job = jobs.find(j => j.id === jobId)
@@ -130,11 +115,6 @@ export default function BOMImport() {
     for (const vendor of vendorList) {
       const items = groups[vendor]
       const total = items.reduce((s, i) => s + i.qty * i.priceEach, 0)
-      const dominantCategory = (() => {
-        const counts = {}
-        items.forEach(i => { counts[i.category] = (counts[i.category] || 0) + 1 })
-        return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Material — Hardware'
-      })()
       const slug = vendorSlug(vendor)
       const poNumber = poPrefix ? `${poPrefix}-${slug}` : slug
 
@@ -143,7 +123,7 @@ export default function BOMImport() {
         vendor,
         po_number: poNumber,
         amount: parseFloat(total.toFixed(2)),
-        category: dominantCategory,
+        category: 'Material — Hardware',
         date_issued: dateIssued || null,
         expected_invoice_date: expectedInvoiceDate || null,
         description: 'BOM import',
@@ -156,12 +136,13 @@ export default function BOMImport() {
         po_id: po.id,
         part_number: item.partNumber || null,
         description: item.description,
+        manufacturer: item.manufacturer || null,
+        uom: item.uom || null,
         qty: item.qty,
         price_each: item.priceEach,
         qty_ordered: 0,
         qty_in_transit: 0,
         qty_delivered: 0,
-        estimated_ship_date: item.estShipDate || null,
         tracking_number: null,
         invoiced: false,
         invoice_date: null,
@@ -215,7 +196,7 @@ export default function BOMImport() {
             <div className="upload-zone" onClick={() => fileRef.current.click()}>
               <FileText size={36} />
               <p>Drop your Bill of Materials here, or click to browse</p>
-              <small>XLSX or CSV — <strong>Column A:</strong> Vendor · <strong>B:</strong> Part # · <strong>C:</strong> Description · <strong>D:</strong> Qty · <strong>E:</strong> Unit Price · <strong>F:</strong> Category · <strong>G:</strong> Est. Ship Date</small>
+              <small>XLSX or CSV — Row 8 = headers · <strong>A:</strong> QTY · <strong>B:</strong> Name · <strong>C:</strong> Manufacturer · <strong>D:</strong> Supplier · <strong>E:</strong> Part # · <strong>F:</strong> UOM · <strong>G:</strong> Item Cost</small>
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handleFile} />
             </div>
 
@@ -272,7 +253,7 @@ export default function BOMImport() {
               <div className="metric-card" style={{ flex: 1, minWidth: 140 }}>
                 <div className="metric-label">POs to Create</div>
                 <div className="metric-value" style={{ fontSize: 22 }}>{Object.keys(groups).length}</div>
-                <div className="metric-sub">One per vendor</div>
+                <div className="metric-sub">One per supplier</div>
               </div>
               <div className="metric-card" style={{ flex: 1, minWidth: 140 }}>
                 <div className="metric-label">Total Line Items</div>
@@ -308,23 +289,20 @@ export default function BOMImport() {
                       <div className="table-wrap">
                         <table>
                           <thead><tr>
-                            <th>Part #</th><th>Description</th>
-                            <th className="text-right">Qty</th>
-                            <th className="text-right">$ Each</th>
-                            <th className="text-right">Total</th>
-                            <th>Category</th>
-                            <th>Est. Ship</th>
+                            <th>Part #</th><th>Description</th><th>Manufacturer</th>
+                            <th className="text-right">Qty</th><th>UOM</th>
+                            <th className="text-right">$ Each</th><th className="text-right">Total</th>
                           </tr></thead>
                           <tbody>
                             {items.map((item, idx) => (
                               <tr key={idx}>
                                 <td style={{ fontSize: 12 }}>{item.partNumber || '—'}</td>
                                 <td style={{ fontSize: 12 }}>{item.description}</td>
+                                <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{item.manufacturer || '—'}</td>
                                 <td className="text-right" style={{ fontSize: 12 }}>{item.qty}</td>
+                                <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{item.uom || '—'}</td>
                                 <td className="text-right" style={{ fontSize: 12 }}>{fmt.currency(item.priceEach)}</td>
                                 <td className="text-right fw-500">{fmt.currency(item.qty * item.priceEach)}</td>
-                                <td><span className="badge badge-blue" style={{ fontSize: 10 }}>{item.category.split(' — ')[1] || item.category}</span></td>
-                                <td style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{item.estShipDate || '—'}</td>
                               </tr>
                             ))}
                           </tbody>
