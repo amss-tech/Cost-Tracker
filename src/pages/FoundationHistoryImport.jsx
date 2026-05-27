@@ -10,6 +10,15 @@ function xlCell(v) {
   return s
 }
 
+function rowHash(r) {
+  const s = [
+    r.cost_date, r.source, r.class, r.cost_code,
+    String(Math.round((r.dollars || 0) * 100)),
+    String(Math.round((r.hours || 0) * 100)),
+  ].join('|')
+  return btoa(unescape(encodeURIComponent(s)))
+}
+
 function parseDate(s) {
   // MM/DD/YYYY → YYYY-MM-DD
   const parts = s.trim().split('/')
@@ -161,30 +170,51 @@ export default function FoundationHistoryImport() {
     if (!selected.length) { setError('No matched jobs selected.'); return }
     setImporting(true); setError('')
 
-    let totalRows = 0
+    let totalAdded = 0
+    let totalRemoved = 0
     const errors = []
 
     for (const group of selected) {
-      // Delete existing rows for this job then insert fresh
-      const { error: delErr } = await supabase
+      const incomingRows = group.rows.map(r => ({
+        ...r,
+        job_id: group.job_id,
+        row_hash: rowHash(r),
+      }))
+      const incomingHashSet = new Set(incomingRows.map(r => r.row_hash))
+
+      const { data: existing, error: fetchErr } = await supabase
         .from('foundation_costs')
-        .delete()
+        .select('id, row_hash')
         .eq('job_id', group.job_id)
 
-      if (delErr) { errors.push(`${group.jobNo}: delete failed`); continue }
+      if (fetchErr) { errors.push(`${group.jobNo}: fetch failed`); continue }
 
-      const toInsert = group.rows.map(r => ({ ...r, job_id: group.job_id }))
+      const existingHashSet = new Set((existing || []).filter(r => r.row_hash).map(r => r.row_hash))
 
-      // Insert in batches of 500
+      // Delete rows no longer in Foundation + legacy NULL-hash rows
+      const toDeleteIds = (existing || [])
+        .filter(r => !r.row_hash || !incomingHashSet.has(r.row_hash))
+        .map(r => r.id)
+
+      if (toDeleteIds.length) {
+        for (let i = 0; i < toDeleteIds.length; i += 200) {
+          const { error: delErr } = await supabase.from('foundation_costs').delete().in('id', toDeleteIds.slice(i, i + 200))
+          if (delErr) { errors.push(`${group.jobNo}: delete failed`); break }
+        }
+        totalRemoved += toDeleteIds.length
+      }
+
+      // Insert only genuinely new rows
+      const toInsert = incomingRows.filter(r => !existingHashSet.has(r.row_hash))
       for (let i = 0; i < toInsert.length; i += 500) {
         const batch = toInsert.slice(i, i + 500)
         const { error: insErr } = await supabase.from('foundation_costs').insert(batch)
         if (insErr) { errors.push(`${group.jobNo}: insert failed — ${insErr.message}`); break }
-        totalRows += batch.length
+        totalAdded += batch.length
       }
     }
 
-    setResult({ jobs: selected.length, rows: totalRows, errors })
+    setResult({ jobs: selected.length, added: totalAdded, removed: totalRemoved, errors })
     setStep('result')
     setImporting(false)
   }
@@ -328,7 +358,7 @@ export default function FoundationHistoryImport() {
           <div style={{ background: '#EAF3DE', border: '0.5px solid #C0DD97', borderRadius: 8, padding: '20px 24px' }}>
             <div style={{ fontWeight: 600, color: '#3B6D11', marginBottom: 8, fontSize: 15 }}>Import complete</div>
             <div style={{ fontSize: 13, color: '#3B6D11', marginBottom: 12 }}>
-              {result.jobs} job{result.jobs !== 1 ? 's' : ''} imported · {result.rows.toLocaleString()} rows
+              {result.jobs} job{result.jobs !== 1 ? 's' : ''} synced · {result.added.toLocaleString()} added · {result.removed.toLocaleString()} removed
             </div>
             {result.errors.length > 0 && (
               <div style={{ background: '#FEF2F2', border: '0.5px solid #FCA5A5', borderRadius: 6, padding: '10px 14px', marginBottom: 12 }}>

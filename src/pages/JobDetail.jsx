@@ -57,27 +57,27 @@ export default function JobDetail() {
   const [actionLog, setActionLog] = useState([])
   const [currentUserEmail, setCurrentUserEmail] = useState('')
 
-  useEffect(() => {
-    async function fetchAllFoundationCosts() {
-      // PostgREST max-rows is a hard ceiling — paginate to get all rows
-      const PAGE = 1000
-      let all = []
-      let from = 0
-      while (true) {
-        const { data, error } = await supabase
-          .from('foundation_costs')
-          .select('*')
-          .eq('job_id', id)
-          .order('cost_date')
-          .range(from, from + PAGE - 1)
-        if (error || !data?.length) break
-        all = [...all, ...data]
-        if (data.length < PAGE) break
-        from += PAGE
-      }
-      return all
+  async function fetchAllFoundationCosts() {
+    // PostgREST max-rows is a hard ceiling — paginate to get all rows
+    const PAGE = 1000
+    let all = []
+    let from = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from('foundation_costs')
+        .select('*')
+        .eq('job_id', id)
+        .order('cost_date')
+        .range(from, from + PAGE - 1)
+      if (error || !data?.length) break
+      all = [...all, ...data]
+      if (data.length < PAGE) break
+      from += PAGE
     }
+    return all
+  }
 
+  useEffect(() => {
     async function load() {
       const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
@@ -141,13 +141,14 @@ export default function JobDetail() {
 
   const postedInvoicesTotal = invoices.filter(inv => inv.foundation_status === 'Posted in Foundation').reduce((s, inv) => s + (inv.amount || 0), 0)
 
-  const glTotal    = foundationCosts.reduce((s,r) => s + (r.dollars||0), 0)
-  const glLabor    = foundationCosts.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
-  const glSub      = foundationCosts.filter(r => r.class === 'SUB').reduce((s,r) => s + (r.dollars||0), 0)
-  const glTravel   = foundationCosts.filter(r => ['TRV','MLS','PER'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
-  const glFuel     = foundationCosts.filter(r => r.class === 'ENE').reduce((s,r) => s + (r.dollars||0), 0)
-  const glRentedEq = foundationCosts.filter(r => r.class === 'REQ').reduce((s,r) => s + (r.dollars||0), 0)
-  const glLaborHours = foundationCosts.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
+  const activeGL     = foundationCosts.filter(r => !r.excluded)
+  const glTotal      = activeGL.reduce((s,r) => s + (r.dollars||0), 0)
+  const glLabor      = activeGL.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
+  const glSub        = activeGL.filter(r => r.class === 'SUB').reduce((s,r) => s + (r.dollars||0), 0)
+  const glTravel     = activeGL.filter(r => ['TRV','MLS','PER'].includes(r.class)).reduce((s,r) => s + (r.dollars||0), 0)
+  const glFuel       = activeGL.filter(r => r.class === 'ENE').reduce((s,r) => s + (r.dollars||0), 0)
+  const glRentedEq   = activeGL.filter(r => r.class === 'REQ').reduce((s,r) => s + (r.dollars||0), 0)
+  const glLaborHours = activeGL.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
   const estGM = gmPct(revisedRevenue, revisedCost)
   const forecastGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
   const actualGLGM = glTotal > 0 ? gmPct(revisedRevenue, glTotal) : null
@@ -157,6 +158,12 @@ export default function JobDetail() {
 
   const totalBilled = billings.reduce((s, b) => s + (b.amount || 0), 0)
   const leftToBill = revisedRevenue - totalBilled
+
+  async function toggleCreditStatus(inv) {
+    const next = inv.credit_status === 'received' ? 'pending' : 'received'
+    await supabase.from('invoices').update({ credit_status: next }).eq('id', inv.id)
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, credit_status: next } : i))
+  }
 
   async function togglePosted(ucId, current) {
     setUncommitted(prev => prev.map(u => u.id === ucId ? { ...u, posted: !current } : u))
@@ -220,6 +227,22 @@ export default function JobDetail() {
       ? `GL Correction Request — Job ${job.job_number} — ${row.cost_date} ${fmt.currency(row.dollars)}`
       : `Billing Correction Request — Job ${job.job_number} — ${fmt.currency(row.amount)}`
     window.open(`mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines.join('\n'))}`)
+  }
+
+  async function resolveCorrection(logEntry) {
+    const ops = [
+      supabase.from('job_action_log').update({ resolved_at: new Date().toISOString() }).eq('id', logEntry.id)
+    ]
+    if (logEntry.foundation_cost_id) {
+      ops.push(supabase.from('foundation_costs').update({ excluded: true }).eq('id', logEntry.foundation_cost_id))
+    }
+    await Promise.all(ops)
+    const [logRes, fc] = await Promise.all([
+      supabase.from('job_action_log').select('*').eq('job_id', id).order('created_at', { ascending: false }),
+      fetchAllFoundationCosts(),
+    ])
+    setActionLog(logRes.data || [])
+    setFoundationCosts(fc || [])
   }
 
   async function setJobStatus(status) {
@@ -747,14 +770,32 @@ export default function JobDetail() {
                   <tbody>
                     {invoices.map(inv => {
                       const linkedPO = pos.find(p => p.id === inv.po_id)
+                      const isCredit = inv.credit_type === 'supplier_credit'
                       return (
-                        <tr key={inv.id}>
-                          <td className="fw-500">{inv.vendor_invoice_number || '—'}</td>
+                        <tr key={inv.id} style={isCredit ? { background: 'rgba(220,38,38,0.04)' } : undefined}>
+                          <td className="fw-500">
+                            {isCredit && <span className="badge" style={{ background: 'var(--color-danger)', color: '#fff', fontSize: 10, marginRight: 6 }}>CREDIT</span>}
+                            {inv.vendor_invoice_number || '—'}
+                          </td>
                           <td>{inv.vendor || '—'}</td>
                           <td>{fmt.date(inv.date_received)}</td>
-                          <td className="text-right">{fmt.currency(inv.amount)}</td>
+                          <td className="text-right fw-500" style={isCredit ? { color: 'var(--color-danger)' } : undefined}>
+                            {fmt.currency(inv.amount)}
+                          </td>
                           <td>{linkedPO ? `${linkedPO.po_number || 'PO'} · ${linkedPO.vendor}` : '—'}</td>
-                          <td>{invoiceStatusBadge(inv.foundation_status)}</td>
+                          <td>
+                            {isCredit
+                              ? <span
+                                  className={`badge ${inv.credit_status === 'received' ? 'badge-green' : 'badge-yellow'}`}
+                                  style={{ cursor: 'pointer', fontSize: 10 }}
+                                  onClick={() => toggleCreditStatus(inv)}
+                                  title="Click to toggle credit status"
+                                >
+                                  {inv.credit_status === 'received' ? 'Credit Received' : 'Credit Pending'}
+                                </span>
+                              : invoiceStatusBadge(inv.foundation_status)
+                            }
+                          </td>
                           <td><button className="btn btn-sm" onClick={() => navigate(`/invoice-entry?edit=${inv.id}&job=${id}`)}><Pencil size={11} /></button></td>
                         </tr>
                       )
@@ -1455,7 +1496,7 @@ export default function JobDetail() {
                         </thead>
                         <tbody>
                           {filtered.map(r => (
-                            <tr key={r.id}>
+                            <tr key={r.id} style={r.excluded ? { opacity: 0.45 } : undefined}>
                               <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmt.date(r.cost_date)}</td>
                               <td style={{ fontSize: 12, fontWeight: 500 }}>{r.cost_code || '—'}</td>
                               <td style={{ fontSize: 13, color: 'var(--color-text-2)', maxWidth: 300 }}>
@@ -1471,16 +1512,25 @@ export default function JobDetail() {
                               <td className="text-right" style={{ fontSize: 12 }}>
                                 {r.hours ? r.hours.toFixed(2) : '—'}
                               </td>
-                              <td className="text-right fw-500">{fmt.currency(r.dollars)}</td>
-                              <td style={{ width: 80, whiteSpace: 'nowrap' }}>
-                                <button className="btn btn-sm" title="Request correction"
-                                  onClick={e => { e.stopPropagation(); openCorrectionModal('gl', r) }}
-                                  style={{ color: 'var(--color-warning)', padding: '2px 4px' }}>
-                                  <Flag size={11} />
-                                </button>
-                                {correctedGLIds.has(r.id) && (
+                              <td className="text-right fw-500" style={r.excluded ? { textDecoration: 'line-through' } : undefined}>
+                                {fmt.currency(r.dollars)}
+                              </td>
+                              <td style={{ width: 100, whiteSpace: 'nowrap' }}>
+                                {!r.excluded && (
+                                  <button className="btn btn-sm" title="Request correction"
+                                    onClick={e => { e.stopPropagation(); openCorrectionModal('gl', r) }}
+                                    style={{ color: 'var(--color-warning)', padding: '2px 4px' }}>
+                                    <Flag size={11} />
+                                  </button>
+                                )}
+                                {correctedGLIds.has(r.id) && !r.excluded && (
                                   <span style={{ fontSize: 10, background: 'var(--color-warning)', color: '#fff', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>
                                     Filed
+                                  </span>
+                                )}
+                                {r.excluded && (
+                                  <span style={{ fontSize: 10, background: 'var(--color-success)', color: '#fff', borderRadius: 4, padding: '1px 5px' }}>
+                                    Excluded
                                   </span>
                                 )}
                               </td>
@@ -1514,7 +1564,7 @@ export default function JobDetail() {
                 <table>
                   <thead><tr>
                     <th>Date</th><th>Type</th><th>Submitted By</th><th>Details</th>
-                    <th className="text-right">Amount</th><th>Destination Job</th>
+                    <th className="text-right">Amount</th><th>Destination Job</th><th>Status</th>
                   </tr></thead>
                   <tbody>
                     {actionLog.map(l => (
@@ -1533,6 +1583,14 @@ export default function JobDetail() {
                         </td>
                         <td className="text-right" style={{ fontSize: 12 }}>{l.source_amount ? fmt.currency(l.source_amount) : '—'}</td>
                         <td style={{ fontSize: 12 }}>{l.dest_job_number || '—'}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          {l.resolved_at
+                            ? <span className="badge badge-green" style={{ fontSize: 10 }}>Resolved {fmt.date(l.resolved_at)}</span>
+                            : l.action_type === 'gl_correction'
+                              ? <button className="btn btn-sm" style={{ fontSize: 11 }} onClick={() => resolveCorrection(l)}>Mark Resolved</button>
+                              : <span className="badge badge-yellow" style={{ fontSize: 10 }}>Filed</span>
+                          }
+                        </td>
                       </tr>
                     ))}
                   </tbody>
