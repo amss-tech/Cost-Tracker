@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { supabaseEsticomms } from '../lib/supabaseEsticomms'
 import { fmt, riskBadge, gmPct, gmCell } from '../lib/utils'
 import { Upload } from 'lucide-react'
 
@@ -15,6 +16,7 @@ export default function Dashboard() {
   const [glByJob, setGlByJob] = useState({})
   const [openLineItems, setOpenLineItems] = useState([])
   const [glLaborMonth, setGlLaborMonth] = useState(0)
+  const [estiCustomerMap, setEstiCustomerMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [wipPeriod, setWipPeriod] = useState('')
 
@@ -32,10 +34,17 @@ export default function Dashboard() {
         supabase.from('billings').select('job_id, amount'),
         supabase.from('change_orders').select('job_id, revenue_amount, cost_amount, status'),
         supabase.from('gl_totals_by_job').select('job_id, gl_total'),
-        supabase.from('po_line_items').select('id, qty, qty_ordered, qty_delivered, description, estimated_ship_date, tracking_number, invoiced, purchase_orders(id, po_number, job_id)').eq('invoiced', false),
+        supabase.from('po_line_items').select('id, qty, qty_ordered, qty_delivered, part_number, description, estimated_ship_date, tracking_number, invoiced, purchase_orders(id, po_number, job_id)').eq('invoiced', false),
         supabase.from('foundation_costs').select('dollars').in('class', ['LAB', 'LPM', 'FRN']).gte('cost_date', monthStart).lte('cost_date', monthEnd).or('excluded.is.null,excluded.eq.false'),
       ])
       setJobs(j.data || [])
+      const customerIds = [...new Set((j.data || []).map(job => job.customer_id).filter(Boolean))]
+      if (customerIds.length > 0) {
+        const { data: custs } = await supabaseEsticomms.from('customers').select('id, name').in('id', customerIds)
+        const cm = {}
+        custs?.forEach(c => { cm[c.id] = c.name })
+        setEstiCustomerMap(cm)
+      }
       setPOs(p.data || [])
       setInvoices(inv.data || [])
       setUncommitted(uc.data || [])
@@ -261,7 +270,7 @@ export default function Dashboard() {
             <div className="card"><div className="table-wrap">
               <table>
                 <thead><tr>
-                  <th>Job #</th><th>PO #</th><th>Description</th>
+                  <th>Job #</th><th>Customer</th><th>PO #</th><th>Part #</th><th>Description</th>
                   <th className="text-right">Qty</th>
                   <th>Est. Ship Date</th>
                   <th>Days Overdue</th>
@@ -272,7 +281,9 @@ export default function Dashboard() {
                     return (
                       <tr key={li.id} className="clickable" onClick={() => navigate(`/jobs/${li.job.id}`)}>
                         <td className="fw-500">{li.job.job_number}</td>
+                        <td style={{ fontSize: 12 }}>{estiCustomerMap[li.job.customer_id] || '—'}</td>
                         <td>{li.purchase_orders?.po_number || '—'}</td>
+                        <td style={{ fontSize: 12, fontFamily: 'monospace' }}>{li.part_number || '—'}</td>
                         <td style={{ fontSize: 13 }}>{li.description}</td>
                         <td className="text-right">{li.qty}</td>
                         <td style={{ color: 'var(--color-danger)' }}>{fmt.date(li.estimated_ship_date)}</td>

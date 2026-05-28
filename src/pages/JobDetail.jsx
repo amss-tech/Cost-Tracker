@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { supabaseEsticomms } from '../lib/supabaseEsticomms'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
 import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database, Flag, Mail } from 'lucide-react'
 
@@ -94,6 +95,9 @@ export default function JobDetail() {
   const [actionLog, setActionLog] = useState([])
   const [currentUserEmail, setCurrentUserEmail] = useState('')
   const [supplierMap, setSupplierMap] = useState({})
+  const [estiCustomer, setEstiCustomer] = useState(null)
+  const [estiSite, setEstiSite] = useState(null)
+  const [estiContact, setEstiContact] = useState(null)
 
   async function fetchAllFoundationCosts() {
     // PostgREST max-rows is a hard ceiling — paginate to get all rows
@@ -136,6 +140,20 @@ export default function JobDetail() {
         supabase.from('suppliers').select('id, email'),
       ])
       setJob(j.data)
+      if (j.data?.customer_id) {
+        const [{ data: cust }, { data: site }, { data: contact }] = await Promise.all([
+          supabaseEsticomms.from('customers').select('id, name').eq('id', j.data.customer_id).single(),
+          j.data.site_id
+            ? supabaseEsticomms.from('customer_locations').select('id, label, city').eq('id', j.data.site_id).single()
+            : Promise.resolve({ data: null }),
+          j.data.contact_id
+            ? supabaseEsticomms.from('contacts').select('id, name, title, email').eq('id', j.data.contact_id).single()
+            : Promise.resolve({ data: null }),
+        ])
+        setEstiCustomer(cust)
+        setEstiSite(site)
+        setEstiContact(contact)
+      }
       setPOs(p.data || [])
       setInvoices(inv.data || [])
       setUncommitted(uc.data || [])
@@ -573,6 +591,13 @@ export default function JobDetail() {
           <div className="job-meta-item">WIP Period: <strong>{job.wip_period || '—'}</strong></div>
           {job.notes && <div className="job-meta-item">Notes: <strong>{job.notes}</strong></div>}
         </div>
+        {estiCustomer && (
+          <div style={{ display:'flex', gap:16, fontSize:12, color:'var(--color-text-2)', marginTop:6, flexWrap:'wrap' }}>
+            <span><strong>Customer:</strong> {estiCustomer.name}</span>
+            {estiSite && <span><strong>Site:</strong> {estiSite.label}{estiSite.city ? `, ${estiSite.city}` : ''}</span>}
+            {estiContact && <span><strong>Contact:</strong> {estiContact.name}{estiContact.title ? ` (${estiContact.title})` : ''}{estiContact.email ? ` · ${estiContact.email}` : ''}</span>}
+          </div>
+        )}
       </div>
 
       <div className="cost-breakdown-grid" style={{ gridTemplateColumns:'repeat(4,1fr)' }}>

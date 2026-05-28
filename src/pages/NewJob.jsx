@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { supabaseEsticomms } from '../lib/supabaseEsticomms'
 
 const TYPES = ['ES', 'Gate', 'Cabling', 'AV', 'Other']
 
@@ -12,10 +13,41 @@ export default function NewJob() {
     job_number: '', job_type: 'ES', project_manager: '', status: 'Active',
     job_description: '', estimated_revenue: '', estimated_cost: '',
     pct_complete: '', estimated_completion_date: '', notes: '',
-    jtd_billing: '', jtd_cost: '', source: 'manual'
+    jtd_billing: '', jtd_cost: '', source: 'manual',
+    customer_id: '', site_id: '', contact_id: ''
   })
+  const [customers, setCustomers] = useState([])
+  const [sites, setSites] = useState([])
+  const [contacts, setContacts] = useState([])
+
+  useEffect(() => {
+    supabaseEsticomms.from('customers').select('id, name').order('name')
+      .then(({ data }) => setCustomers(data || []))
+  }, [])
 
   function set(field, val) { setForm(f => ({ ...f, [field]: val })) }
+
+  async function handleCustomerChange(customerId) {
+    set('customer_id', customerId)
+    set('site_id', '')
+    set('contact_id', '')
+    setSites([])
+    setContacts([])
+    if (!customerId) return
+    const { data } = await supabaseEsticomms.from('customer_locations')
+      .select('id, label, address, city').eq('customer_id', customerId).order('sort_order')
+    setSites(data || [])
+  }
+
+  async function handleSiteChange(siteId) {
+    set('site_id', siteId)
+    set('contact_id', '')
+    setContacts([])
+    if (!siteId) return
+    const { data } = await supabaseEsticomms.from('contacts')
+      .select('id, name, title').eq('customer_id', form.customer_id).order('name')
+    setContacts(data || [])
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -42,6 +74,9 @@ export default function NewJob() {
       jtd_billing: parseFloat(form.jtd_billing) || 0,
       jtd_cost: parseFloat(form.jtd_cost) || 0,
       estimated_completion_date: form.estimated_completion_date || null,
+      customer_id: form.customer_id || null,
+      site_id: form.site_id || null,
+      contact_id: form.contact_id || null,
     }
 
     const { data, error: err } = await supabase.from('jobs').insert(payload).select().single()
@@ -86,6 +121,37 @@ export default function NewJob() {
                 <label>Job Description *</label>
                 <input type="text" placeholder="Brief description of the job" value={form.job_description} onChange={e => set('job_description', e.target.value)} required />
               </div>
+            </div>
+          </div>
+
+          <div className="form-section">
+            <div className="form-section-title">Customer</div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Customer</label>
+                <select value={form.customer_id} onChange={e => handleCustomerChange(e.target.value)}>
+                  <option value="">— None —</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              {sites.length > 0 && (
+                <div className="form-group">
+                  <label>Site</label>
+                  <select value={form.site_id} onChange={e => handleSiteChange(e.target.value)}>
+                    <option value="">— None —</option>
+                    {sites.map(s => <option key={s.id} value={s.id}>{s.label}{s.city ? ` — ${s.city}` : ''}</option>)}
+                  </select>
+                </div>
+              )}
+              {contacts.length > 0 && (
+                <div className="form-group">
+                  <label>Contact</label>
+                  <select value={form.contact_id} onChange={e => set('contact_id', e.target.value)}>
+                    <option value="">— None —</option>
+                    {contacts.map(c => <option key={c.id} value={c.id}>{c.name}{c.title ? ` (${c.title})` : ''}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 
