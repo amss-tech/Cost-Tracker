@@ -72,12 +72,13 @@ export default function Jobs() {
     const revisedCost = (j.estimated_cost || 0) + (coCostByJob[j.id] || 0)
     const variance = revisedCost - tracked
     const estGM = gmPct(revisedRevenue, revisedCost)
-    const forecastGM = tracked > 0 ? gmPct(revisedRevenue, tracked) : null
     const glCost = glByJob[j.id] || 0
+    const forecastCost = glCost + (ucByJob[j.id] || 0)
+    const forecastGM = forecastCost > 0 ? gmPct(revisedRevenue, forecastCost) : null
     const actualGLGM = glCost > 0 ? gmPct(revisedRevenue, glCost) : null
     const billed = billedByJob[j.id] || 0
     const leftToBill = revisedRevenue - billed
-    return { ...j, tracked, glCost, variance, estGM, forecastGM, actualGLGM, billed, leftToBill, revisedRevenue, revisedCost }
+    return { ...j, tracked, glCost, forecastCost, variance, estGM, forecastGM, actualGLGM, billed, leftToBill, revisedRevenue, revisedCost }
   }).filter(j => {
     if (!showCompleted && j.status === 'Complete') return false
     if (showCompleted && j.status !== 'Complete') return false
@@ -165,7 +166,7 @@ export default function Jobs() {
                       <td className="text-right">{fmt.currency(j.revisedRevenue)}</td>
                       <td className="text-right">{fmt.currency(j.revisedCost)}</td>
                       <td className="text-right">{gmCell(j.estGM)}</td>
-                      <td className="text-right">{j.tracked > 0 ? fmt.currency(j.tracked) : <span className="text-muted">—</span>}</td>
+                      <td className="text-right">{j.forecastCost > 0 ? fmt.currency(j.forecastCost) : <span className="text-muted">—</span>}</td>
                       <td className="text-right">{gmCell(j.forecastGM, j.estGM)}</td>
                       <td className="text-right">{j.actualGLGM != null ? gmCell(j.actualGLGM, j.estGM) : <span className="text-muted">—</span>}</td>
                       <td className="text-right fw-500" style={{ color: j.billed > 0 ? 'var(--color-primary)' : undefined }}>

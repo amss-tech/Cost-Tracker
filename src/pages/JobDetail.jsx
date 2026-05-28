@@ -150,7 +150,8 @@ export default function JobDetail() {
   const glRentedEq   = activeGL.filter(r => r.class === 'REQ').reduce((s,r) => s + (r.dollars||0), 0)
   const glLaborHours = activeGL.filter(r => ['LAB','LPM','FRN'].includes(r.class)).reduce((s,r) => s + (r.hours||0), 0)
   const estGM = gmPct(revisedRevenue, revisedCost)
-  const forecastGM = trackedTotal > 0 ? gmPct(revisedRevenue, trackedTotal) : null
+  const forecastCost = glTotal + trackedUC
+  const forecastGM = forecastCost > 0 ? gmPct(revisedRevenue, forecastCost) : null
   const actualGLGM = glTotal > 0 ? gmPct(revisedRevenue, glTotal) : null
 
   const correctedGLIds = new Set(actionLog.filter(l => l.foundation_cost_id).map(l => l.foundation_cost_id))
@@ -516,7 +517,7 @@ export default function JobDetail() {
             {trackedTotal > 0 ? (variance >= 0 ? '+' : '') + fmt.currency(variance) : '—'}
           </div>
           <div className="cost-box-sub">
-            Forecast: {fmt.currency(trackedTotal)}
+            Forecast: {fmt.currency(forecastCost)}
             {trackedDirectInv > 0 ? ` · Direct Inv: ${fmt.currency(trackedDirectInv)}` : ''}
           </div>
         </div>

@@ -12,12 +12,14 @@ export default function Dashboard() {
   const [uncommitted, setUncommitted] = useState([])
   const [billings, setBillings] = useState([])
   const [cos, setCOs] = useState([])
+  const [glByJob, setGlByJob] = useState({})
+  const [openLineItems, setOpenLineItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [wipPeriod, setWipPeriod] = useState('')
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, wi, bil, co] = await Promise.all([
+      const [j, p, inv, uc, wi, bil, co, gl, li] = await Promise.all([
         supabase.from('jobs').select('*').order('job_number'),
         supabase.from('purchase_orders').select('*'),
         supabase.from('invoices').select('*'),
@@ -25,6 +27,8 @@ export default function Dashboard() {
         supabase.from('wip_imports').select('period').order('imported_at', { ascending: false }).limit(1),
         supabase.from('billings').select('job_id, amount'),
         supabase.from('change_orders').select('job_id, revenue_amount, cost_amount, status'),
+        supabase.from('gl_totals_by_job').select('job_id, gl_total'),
+        supabase.from('po_line_items').select('id, qty, qty_ordered, qty_delivered, description, estimated_ship_date, tracking_number, invoiced, purchase_orders(id, po_number, job_id)').eq('invoiced', false),
       ])
       setJobs(j.data || [])
       setPOs(p.data || [])
@@ -33,6 +37,10 @@ export default function Dashboard() {
       setBillings(bil.data || [])
       setCOs(co.data || [])
       setWipPeriod(wi.data?.[0]?.period || '')
+      const glMap = {}
+      gl.data?.forEach(r => { glMap[r.job_id] = r.gl_total || 0 })
+      setGlByJob(glMap)
+      setOpenLineItems(li.data || [])
       setLoading(false)
     }
     load()
@@ -83,11 +91,44 @@ export default function Dashboard() {
     const revisedCost = (j.estimated_cost || 0) + (coCostByJob[j.id] || 0)
     const variance = revisedCost - tracked
     const estGM = gmPct(revisedRevenue, revisedCost)
-    const actualGM = tracked > 0 ? gmPct(revisedRevenue, tracked) : null
+    const glCost = glByJob[j.id] || 0
+    const forecastCost = glCost + (ucByJob[j.id] || 0)
+    const forecastGM = forecastCost > 0 ? gmPct(revisedRevenue, forecastCost) : null
     const billed = billedByJob[j.id] || 0
     const leftToBill = revisedRevenue - billed
-    return { ...j, tracked, variance, estGM, actualGM, billed, leftToBill, revisedRevenue, revisedCost }
+    return { ...j, tracked, variance, estGM, forecastGM, billed, leftToBill, revisedRevenue, revisedCost }
   }).filter(j => j.tracked > 0 && j.status !== 'Complete').sort((a, b) => a.variance - b.variance).slice(0, 10)
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  const partiallyDelivered = openLineItems.filter(li =>
+    (li.qty_ordered || 0) > 0 &&
+    (li.qty_delivered || 0) > 0 &&
+    (li.qty_delivered || 0) < (li.qty_ordered || 0)
+  ).map(li => ({ ...li, job: jobs.find(j => j.id === li.purchase_orders?.job_id) }))
+    .filter(li => li.job && li.job.status !== 'Complete')
+    .slice(0, 20)
+
+  const pastDueShipments = openLineItems.filter(li =>
+    li.estimated_ship_date &&
+    li.estimated_ship_date < today &&
+    !li.tracking_number
+  ).map(li => ({ ...li, job: jobs.find(j => j.id === li.purchase_orders?.job_id) }))
+    .filter(li => li.job && li.job.status !== 'Complete')
+    .sort((a, b) => a.estimated_ship_date.localeCompare(b.estimated_ship_date))
+    .slice(0, 20)
+
+  const billingAlerts = jobs
+    .filter(j => j.status !== 'Complete')
+    .map(j => {
+      const glCost = glByJob[j.id] || 0
+      const forecastCost = glCost + (ucByJob[j.id] || 0)
+      const billed = billedByJob[j.id] || 0
+      return { ...j, forecastCost, billed, gap: forecastCost - billed }
+    })
+    .filter(j => j.gap > 5000)
+    .sort((a, b) => b.gap - a.gap)
+    .slice(0, 10)
 
   // PM chart data
   const pmUninvoiced = {}
@@ -174,6 +215,108 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Partially Delivered Parts */}
+        {partiallyDelivered.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div className="section-header">
+              <span className="section-title">Jobs with Partially Delivered Parts ({partiallyDelivered.length})</span>
+            </div>
+            <div className="card"><div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>Job #</th><th>PO #</th><th>Description</th>
+                  <th className="text-right">Ordered</th>
+                  <th className="text-right">Delivered</th>
+                  <th>Est. Ship Date</th>
+                </tr></thead>
+                <tbody>
+                  {partiallyDelivered.map(li => (
+                    <tr key={li.id} className="clickable" onClick={() => navigate(`/jobs/${li.job.id}`)}>
+                      <td className="fw-500">{li.job.job_number}</td>
+                      <td>{li.purchase_orders?.po_number || '—'}</td>
+                      <td style={{ fontSize: 13 }}>{li.description}</td>
+                      <td className="text-right">{li.qty_ordered}</td>
+                      <td className="text-right" style={{ color: 'var(--color-warning)' }}>{li.qty_delivered}</td>
+                      <td>{li.estimated_ship_date ? fmt.date(li.estimated_ship_date) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div></div>
+          </div>
+        )}
+
+        {/* Past-Due Ship Dates */}
+        {pastDueShipments.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div className="section-header">
+              <span className="section-title">Estimated Ship Dates Past Due — No Tracking ({pastDueShipments.length})</span>
+            </div>
+            <div className="card"><div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>Job #</th><th>PO #</th><th>Description</th>
+                  <th className="text-right">Qty</th>
+                  <th>Est. Ship Date</th>
+                  <th>Days Overdue</th>
+                </tr></thead>
+                <tbody>
+                  {pastDueShipments.map(li => {
+                    const daysOver = Math.floor((new Date() - new Date(li.estimated_ship_date)) / 86400000)
+                    return (
+                      <tr key={li.id} className="clickable" onClick={() => navigate(`/jobs/${li.job.id}`)}>
+                        <td className="fw-500">{li.job.job_number}</td>
+                        <td>{li.purchase_orders?.po_number || '—'}</td>
+                        <td style={{ fontSize: 13 }}>{li.description}</td>
+                        <td className="text-right">{li.qty}</td>
+                        <td style={{ color: 'var(--color-danger)' }}>{fmt.date(li.estimated_ship_date)}</td>
+                        <td>
+                          <span className="badge" style={{ background: daysOver > 14 ? 'var(--color-danger)' : 'var(--color-warning)', color: '#fff', fontSize: 10 }}>
+                            {daysOver}d overdue
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div></div>
+          </div>
+        )}
+
+        {/* Billing Recommendation */}
+        {billingAlerts.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div className="section-header">
+              <span className="section-title">Billing Recommendation — Costs Exceed Billing ({billingAlerts.length})</span>
+            </div>
+            <div className="card"><div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>Job #</th><th>Description</th><th>PM</th>
+                  <th className="text-right">GL + Uncommitted Cost</th>
+                  <th className="text-right">Billed to Date</th>
+                  <th className="text-right">Unbilled Gap</th>
+                </tr></thead>
+                <tbody>
+                  {billingAlerts.map(j => (
+                    <tr key={j.id} className="clickable" onClick={() => navigate(`/jobs/${j.id}`)}>
+                      <td className="fw-500">{j.job_number}</td>
+                      <td>{j.job_description}</td>
+                      <td>{j.project_manager}</td>
+                      <td className="text-right">{fmt.currency(j.forecastCost)}</td>
+                      <td className="text-right">{j.billed > 0 ? fmt.currency(j.billed) : '—'}</td>
+                      <td className="text-right fw-500" style={{ color: 'var(--color-danger)' }}>
+                        {fmt.currency(j.gap)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div></div>
+          </div>
+        )}
+
         {/* Risk table */}
         <div className="section-header">
           <span className="section-title">Jobs with cost activity</span>
@@ -188,7 +331,7 @@ export default function Dashboard() {
                 <th className="text-right">Est. Total Cost</th>
                 <th className="text-right">Est GM%</th>
                 <th className="text-right">Tracked Cost</th>
-                <th className="text-right">Actual GM%</th>
+                <th className="text-right">Forecast GM%</th>
                 <th className="text-right">Billed to Date</th>
                 <th className="text-right">Left to Bill</th>
                 <th className="text-right">Variance (Over/Under)</th>
@@ -206,7 +349,7 @@ export default function Dashboard() {
                       <td className="text-right">{fmt.currency(j.revisedCost)}</td>
                       <td className="text-right">{gmCell(j.estGM)}</td>
                       <td className="text-right">{fmt.currency(j.tracked)}</td>
-                      <td className="text-right">{gmCell(j.actualGM, j.estGM)}</td>
+                      <td className="text-right">{j.forecastGM != null ? gmCell(j.forecastGM, j.estGM) : <span style={{ color: 'var(--color-text-3)' }}>—</span>}</td>
                       <td className="text-right fw-500" style={{ color: j.billed > 0 ? 'var(--color-primary)' : undefined }}>
                         {j.billed > 0 ? fmt.currency(j.billed) : '—'}
                       </td>
