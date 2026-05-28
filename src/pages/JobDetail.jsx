@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { fmt, jobTypeBadge, riskBadge, trackingUrl, gmPct, gmCell } from '../lib/utils'
-import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database, Flag } from 'lucide-react'
+import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, ExternalLink, Lock, Upload, ClipboardList, Database, Flag, Mail } from 'lucide-react'
 
 const AP_EMAIL = 'corrections@tuscoinc.com'
 
@@ -93,6 +93,7 @@ export default function JobDetail() {
   const [allJobs, setAllJobs] = useState([])
   const [actionLog, setActionLog] = useState([])
   const [currentUserEmail, setCurrentUserEmail] = useState('')
+  const [supplierMap, setSupplierMap] = useState({})
 
   async function fetchAllFoundationCosts() {
     // PostgREST max-rows is a hard ceiling — paginate to get all rows
@@ -116,7 +117,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user, bf] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user, bf, sup] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -132,6 +133,7 @@ export default function JobDetail() {
         supabase.from('job_action_log').select('*').eq('job_id', id).order('created_at', { ascending: false }),
         supabase.auth.getUser(),
         supabase.from('billing_forecast').select('*').eq('job_id', id),
+        supabase.from('suppliers').select('id, email'),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -150,6 +152,9 @@ export default function JobDetail() {
       const fcMap = {}
       bf.data?.forEach(r => { fcMap[r.month] = r })
       setBillingForecast(fcMap)
+      const sm = {}
+      sup.data?.forEach(s => { sm[s.id] = s })
+      setSupplierMap(sm)
       setLoading(false)
     }
     load()
@@ -224,6 +229,35 @@ export default function JobDetail() {
   async function deleteUncommitted(ucId) {
     await supabase.from('uncommitted_costs').delete().eq('id', ucId)
     setUncommitted(prev => prev.filter(u => u.id !== ucId))
+  }
+
+  async function deletePO(poId) {
+    await supabase.from('po_line_items').delete().eq('po_id', poId)
+    await supabase.from('purchase_orders').delete().eq('id', poId)
+    setPOs(prev => prev.filter(p => p.id !== poId))
+  }
+
+  function requestPricing(po) {
+    const lines = po.po_line_items || []
+    const toEmail = (po.supplier_id && supplierMap[po.supplier_id]?.email) || ''
+    const subject = `Pricing Update Request — ${po.po_number ? `PO ${po.po_number} — ` : ''}Job ${job.job_number}`
+    const itemLines = lines.map(l =>
+      `  ${l.part_number || '—'} | ${l.description || '—'} | Qty: ${l.qty ?? '—'} | Current: ${l.price_each > 0 ? fmt.currency(l.price_each) : '—'}`
+    )
+    const body = [
+      'Hello,', '',
+      `Please provide updated pricing for the following items on ${po.po_number ? `PO ${po.po_number}` : 'our purchase order'} for Job ${job.job_number} — ${job.job_description}:`,
+      '',
+      '  Part # | Description | Qty | Current Price',
+      '  ' + '-'.repeat(60),
+      ...itemLines,
+      '',
+      'Please reply with updated unit pricing at your earliest convenience.',
+      '',
+      'Thank you,',
+      '',
+    ].join('\n')
+    window.open(`mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`)
   }
 
   async function openCorrectionModal(type, row) {
@@ -735,10 +769,26 @@ export default function JobDetail() {
                           Rcvd: {fmt.date(p.date_received)}
                         </div>
                       )}
-                      <button className="btn btn-sm" style={{ marginTop:6 }}
-                        onClick={e => { e.stopPropagation(); navigate(`/po-entry?edit=${p.id}&job=${id}`) }}>
-                        <Pencil size={11} /> Edit
-                      </button>
+                      <div style={{ display:'flex', gap:4, marginTop:6, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                        <button className="btn btn-sm"
+                          onClick={e => { e.stopPropagation(); navigate(`/po-entry?edit=${p.id}&job=${id}`) }}>
+                          <Pencil size={11} /> Edit
+                        </button>
+                        {lines.length > 0 && (
+                          <button className="btn btn-sm" title="Request updated pricing from vendor"
+                            onClick={e => { e.stopPropagation(); requestPricing(p) }}>
+                            <Mail size={11} /> Pricing
+                          </button>
+                        )}
+                        <button className="btn btn-sm" style={{ color: 'var(--color-danger)' }} title="Delete PO"
+                          onClick={e => {
+                            e.stopPropagation()
+                            if (window.confirm(`Delete PO ${p.po_number || '(no number)'} — ${p.vendor}?\n\nThis cannot be undone. Linked invoices will remain but lose their PO link.`))
+                              deletePO(p.id)
+                          }}>
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                   {isExpanded && lines.length > 0 && (
