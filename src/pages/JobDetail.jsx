@@ -6,6 +6,42 @@ import { ArrowLeft, Plus, Pencil, CheckCircle, RotateCcw, Trash2, Clock, Link, E
 
 const AP_EMAIL = 'corrections@tuscoinc.com'
 
+function ForecastRow({ label, monthKey, planned, actual, delta, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(planned != null ? planned : '')
+  useEffect(() => { setVal(planned != null ? planned : '') }, [planned])
+  function commit() {
+    onSave(monthKey, val === '' ? null : parseFloat(val) || 0)
+    setEditing(false)
+  }
+  return (
+    <tr>
+      <td style={{ fontSize: 13 }}>{label}</td>
+      <td className="text-right" style={{ minWidth: 120 }}>
+        {editing ? (
+          <input type="number" step="0.01" autoFocus value={val}
+            onChange={e => setVal(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setVal(planned ?? ''); setEditing(false) } }}
+            style={{ width: 110, textAlign: 'right', fontSize: 13, padding: '2px 4px', border: '2px solid var(--color-primary)', borderRadius: 3 }}
+          />
+        ) : (
+          <span onClick={() => setEditing(true)} title="Click to set planned billing"
+            style={{ cursor: 'pointer', color: planned > 0 ? 'inherit' : 'var(--color-text-3)' }}>
+            {planned > 0 ? fmt.currency(planned) : '—'}
+          </span>
+        )}
+      </td>
+      <td className="text-right" style={{ color: actual > 0 ? 'var(--color-success)' : 'var(--color-text-3)' }}>
+        {actual > 0 ? fmt.currency(actual) : '—'}
+      </td>
+      <td className={`text-right fw-500 ${delta > 0 ? 'text-success' : delta < 0 ? 'text-danger' : ''}`} style={{ fontSize: 12 }}>
+        {planned > 0 || actual > 0 ? (delta >= 0 ? '+' : '') + fmt.currency(delta) : ''}
+      </td>
+    </tr>
+  )
+}
+
 const GL_CLASS_GROUPS = [
   { label: 'Labor',            codes: ['LAB', 'LPM'] },
   { label: 'Material',         codes: ['MAT'] },
@@ -33,6 +69,7 @@ export default function JobDetail() {
   const [uncommitted, setUncommitted] = useState([])
   const [cos, setCOs] = useState([])
   const [billings, setBillings] = useState([])
+  const [billingForecast, setBillingForecast] = useState({})
   const [activeTab, setActiveTab] = useState('pos')
   const [expandedPOs, setExpandedPOs] = useState(new Set())
   const [loading, setLoading] = useState(true)
@@ -79,7 +116,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user, bf] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -94,6 +131,7 @@ export default function JobDetail() {
         fetchAllFoundationCosts(),
         supabase.from('job_action_log').select('*').eq('job_id', id).order('created_at', { ascending: false }),
         supabase.auth.getUser(),
+        supabase.from('billing_forecast').select('*').eq('job_id', id),
       ])
       setJob(j.data)
       setPOs(p.data || [])
@@ -109,6 +147,9 @@ export default function JobDetail() {
       setFoundationCosts(fc || [])
       setActionLog(log.data || [])
       setCurrentUserEmail(user.data?.user?.email || '')
+      const fcMap = {}
+      bf.data?.forEach(r => { fcMap[r.month] = r })
+      setBillingForecast(fcMap)
       setLoading(false)
     }
     load()
@@ -164,6 +205,15 @@ export default function JobDetail() {
     const next = inv.credit_status === 'received' ? 'pending' : 'received'
     await supabase.from('invoices').update({ credit_status: next }).eq('id', inv.id)
     setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, credit_status: next } : i))
+  }
+
+  async function savePlannedBilling(monthKey, value) {
+    const existing = billingForecast[monthKey]
+    const payload = { job_id: id, month: monthKey, planned_billing: value, planned_cost: existing?.planned_cost ?? null }
+    const { data, error } = existing
+      ? await supabase.from('billing_forecast').update({ planned_billing: value }).eq('id', existing.id).select().single()
+      : await supabase.from('billing_forecast').insert(payload).select().single()
+    if (!error && data) setBillingForecast(f => ({ ...f, [monthKey]: data }))
   }
 
   async function togglePosted(ucId, current) {
@@ -1148,6 +1198,64 @@ export default function JobDetail() {
       {/* Billings */}
       {activeTab === 'billings' && (
         <div className="tab-content">
+          {/* Planned Billing Forecast */}
+          {(() => {
+            const now = new Date()
+            const forecastMonths = Array.from({ length: 12 }, (_, i) => {
+              const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+              return {
+                key: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`,
+                label: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+              }
+            })
+            const actualBilByMonth = {}
+            billings.forEach(b => {
+              if (!b.date_submitted) return
+              const m = b.date_submitted.slice(0, 7)
+              actualBilByMonth[m] = (actualBilByMonth[m] || 0) + (b.amount || 0)
+            })
+            const plannedTotal = forecastMonths.reduce((s, m) => s + (billingForecast[m.key]?.planned_billing || 0), 0)
+            const actualTotal = forecastMonths.reduce((s, m) => s + (actualBilByMonth[m.key] || 0), 0)
+            return (
+              <div style={{ marginBottom: 24 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 8 }}>
+                  <span className="section-title">Planned Billing Forecast</span>
+                  <span style={{ fontSize:11, color:'var(--color-text-3)' }}>Click amount to edit — feeds Cost Forecast report</span>
+                </div>
+                <div className="card"><div className="table-wrap">
+                  <table>
+                    <thead><tr>
+                      <th>Month</th>
+                      <th className="text-right">Planned</th>
+                      <th className="text-right">Actual</th>
+                      <th className="text-right">Delta</th>
+                    </tr></thead>
+                    <tbody>
+                      {forecastMonths.map(m => {
+                        const planned = billingForecast[m.key]?.planned_billing ?? null
+                        const actual = actualBilByMonth[m.key] || 0
+                        const delta = actual - (planned || 0)
+                        return (
+                          <ForecastRow key={m.key} label={m.label} monthKey={m.key}
+                            planned={planned} actual={actual} delta={delta}
+                            onSave={savePlannedBilling} />
+                        )
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: '2px solid var(--color-border)', fontWeight: 600 }}>
+                        <td>12-Month Total</td>
+                        <td className="text-right">{plannedTotal > 0 ? fmt.currency(plannedTotal) : <span className="text-muted">—</span>}</td>
+                        <td className="text-right" style={{ color: actualTotal > 0 ? 'var(--color-success)' : undefined }}>{actualTotal > 0 ? fmt.currency(actualTotal) : <span className="text-muted">—</span>}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div></div>
+              </div>
+            )
+          })()}
+
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
             <div style={{ fontSize:13, color:'var(--color-text-2)' }}>
               Billed: <strong style={{ color:'var(--color-text)' }}>{fmt.currency(totalBilled)}</strong>
