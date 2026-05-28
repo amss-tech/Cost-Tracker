@@ -14,12 +14,16 @@ export default function Dashboard() {
   const [cos, setCOs] = useState([])
   const [glByJob, setGlByJob] = useState({})
   const [openLineItems, setOpenLineItems] = useState([])
+  const [glLaborMonth, setGlLaborMonth] = useState(0)
   const [loading, setLoading] = useState(true)
   const [wipPeriod, setWipPeriod] = useState('')
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, wi, bil, co, gl, li] = await Promise.all([
+      const now = new Date()
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`
+      const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0).toISOString().slice(0, 10)
+      const [j, p, inv, uc, wi, bil, co, gl, li, glLab] = await Promise.all([
         supabase.from('jobs').select('*').order('job_number'),
         supabase.from('purchase_orders').select('*'),
         supabase.from('invoices').select('*'),
@@ -29,6 +33,7 @@ export default function Dashboard() {
         supabase.from('change_orders').select('job_id, revenue_amount, cost_amount, status'),
         supabase.from('gl_totals_by_job').select('job_id, gl_total'),
         supabase.from('po_line_items').select('id, qty, qty_ordered, qty_delivered, description, estimated_ship_date, tracking_number, invoiced, purchase_orders(id, po_number, job_id)').eq('invoiced', false),
+        supabase.from('foundation_costs').select('dollars').in('class', ['LAB', 'LPM', 'FRN']).gte('cost_date', monthStart).lte('cost_date', monthEnd).or('excluded.is.null,excluded.eq.false'),
       ])
       setJobs(j.data || [])
       setPOs(p.data || [])
@@ -41,6 +46,7 @@ export default function Dashboard() {
       gl.data?.forEach(r => { glMap[r.job_id] = r.gl_total || 0 })
       setGlByJob(glMap)
       setOpenLineItems(li.data || [])
+      setGlLaborMonth(glLab.data?.reduce((s, r) => s + (r.dollars || 0), 0) || 0)
       setLoading(false)
     }
     load()
@@ -62,7 +68,7 @@ export default function Dashboard() {
   const unpostedLabor = uncommitted.filter(u => u.category === 'Labor — Hours × Rate' && !u.posted).reduce((s, u) => s + (u.amount || 0), 0)
   const postedInvoices = invoices.filter(inv => inv.foundation_status === 'Posted in Foundation').reduce((s, inv) => s + (inv.amount || 0), 0)
   const postedInvoiceCount = invoices.filter(inv => inv.foundation_status === 'Posted in Foundation').length
-  const postedLabor = uncommitted.filter(u => u.category === 'Labor — Hours × Rate' && u.posted).reduce((s, u) => s + (u.amount || 0), 0)
+  const postedLabor = glLaborMonth
 
   // Build per-job aggregates for risk table
   const ucByJob = {}, billedByJob = {}, coRevenueByJob = {}, coCostByJob = {}
@@ -189,7 +195,7 @@ export default function Dashboard() {
             <div className="metric-value" style={{ color: postedLabor > 0 ? 'var(--color-success)' : 'inherit' }}>
               {fmt.currency(postedLabor)}
             </div>
-            <div className="metric-sub">Labor confirmed in Foundation</div>
+            <div className="metric-sub">GL posted labor — current month</div>
           </div>
           <div className="metric-card">
             <div className="metric-label">Unposted Labor</div>

@@ -32,7 +32,7 @@ export default function POEntry() {
     po_number: '', vendor: '', amount: '',
     category: 'Material — Hardware', date_issued: '',
     expected_invoice_date: '', delivery_status: 'Not Ordered',
-    description: ''
+    description: '', date_received: ''
   })
   const [lines, setLines] = useState([])
   const [deletedLineIds, setDeletedLineIds] = useState([])
@@ -61,6 +61,7 @@ export default function POEntry() {
         expected_invoice_date: po.expected_invoice_date || '',
         delivery_status: po.delivery_status || 'Not Ordered',
         description: po.description || '',
+        date_received: po.date_received || '',
       })
       setLines((lineData || []).map(l => ({ ...l, _key: Math.random(), invoiced: l.invoiced ?? false, invoice_date: l.invoice_date ?? '' })))
       setLoading(false)
@@ -99,6 +100,7 @@ export default function POEntry() {
       expected_invoice_date: form.expected_invoice_date || null,
       delivery_status: form.delivery_status,
       description: form.description,
+      date_received: form.date_received || null,
     }
 
     let poId = editId
@@ -219,6 +221,10 @@ export default function POEntry() {
                 <select value={form.delivery_status} onChange={e => set('delivery_status', e.target.value)}>
                   {DELIVERY.map(d => <option key={d}>{d}</option>)}
                 </select>
+              </div>
+              <div className="form-group">
+                <label>Date Received</label>
+                <input type="date" value={form.date_received} onChange={e => set('date_received', e.target.value)} />
               </div>
               <div className="form-group full">
                 <label>Description</label>

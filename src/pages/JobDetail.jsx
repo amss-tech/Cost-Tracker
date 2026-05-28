@@ -680,6 +680,11 @@ export default function JobDetail() {
                       <div style={{ fontSize:11, color:'var(--color-text-3)', marginTop:2 }}>
                         {p.expected_invoice_date ? `Exp: ${fmt.date(p.expected_invoice_date)}` : ''}
                       </div>
+                      {p.date_received && (
+                        <div style={{ fontSize:11, color:'var(--color-text-3)', marginTop:2 }}>
+                          Rcvd: {fmt.date(p.date_received)}
+                        </div>
+                      )}
                       <button className="btn btn-sm" style={{ marginTop:6 }}
                         onClick={e => { e.stopPropagation(); navigate(`/po-entry?edit=${p.id}&job=${id}`) }}>
                         <Pencil size={11} /> Edit
