@@ -95,6 +95,9 @@ export default function JobDetail() {
   const [actionLog, setActionLog] = useState([])
   const [currentUserEmail, setCurrentUserEmail] = useState('')
   const [supplierMap, setSupplierMap] = useState({})
+  const [jobTasks, setJobTasks] = useState([])
+  const [taskForm, setTaskForm] = useState(null)
+  const [savingTask, setSavingTask] = useState(false)
   const [estiCustomer, setEstiCustomer] = useState(null)
   const [estiSite, setEstiSite] = useState(null)
   const [estiContact, setEstiContact] = useState(null)
@@ -121,7 +124,7 @@ export default function JobDetail() {
 
   useEffect(() => {
     async function load() {
-      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user, bf, sup] = await Promise.all([
+      const [j, p, inv, uc, co, bil, te, docs, dr, it, is_, fc, log, user, bf, sup, tasks] = await Promise.all([
         supabase.from('jobs').select('*').eq('id', id).single(),
         supabase.from('purchase_orders').select('*, po_line_items(*)').eq('job_id', id).order('created_at'),
         supabase.from('invoices').select('*').eq('job_id', id).order('date_received'),
@@ -138,6 +141,7 @@ export default function JobDetail() {
         supabase.auth.getUser(),
         supabase.from('billing_forecast').select('*').eq('job_id', id),
         supabase.from('suppliers').select('id, email'),
+        supabase.from('job_tasks').select('*').eq('job_id', id).order('created_at'),
       ])
       setJob(j.data)
       if (j.data?.customer_id) {
@@ -173,6 +177,7 @@ export default function JobDetail() {
       const sm = {}
       sup.data?.forEach(s => { sm[s.id] = s })
       setSupplierMap(sm)
+      setJobTasks(tasks.data || [])
       setLoading(false)
     }
     load()
@@ -247,6 +252,48 @@ export default function JobDetail() {
   async function deleteUncommitted(ucId) {
     await supabase.from('uncommitted_costs').delete().eq('id', ucId)
     setUncommitted(prev => prev.filter(u => u.id !== ucId))
+  }
+
+  async function saveTask(e) {
+    e.preventDefault()
+    if (!taskForm) return
+    setSavingTask(true)
+    const f = taskForm
+    const payload = {
+      job_id: id,
+      phase: f.phase || null,
+      sub_job: f.sub_job || null,
+      scope_system: f.scope_system || null,
+      lead: f.lead || null,
+      contractor: f.contractor || null,
+      status: f.status || 'Not Started',
+      priority: f.priority || 'Medium',
+      pct_complete: f.pct_complete ? parseFloat(f.pct_complete) / 100 : 0,
+      start_date: f.start_date || null,
+      completion_date: f.completion_date || null,
+      next_action: f.next_action || null,
+      blocker_notes: f.blocker_notes || null,
+    }
+    if (f.id) {
+      const { data } = await supabase.from('job_tasks').update(payload).eq('id', f.id).select().single()
+      if (data) setJobTasks(prev => prev.map(t => t.id === f.id ? data : t))
+    } else {
+      const { data } = await supabase.from('job_tasks').insert(payload).select().single()
+      if (data) setJobTasks(prev => [...prev, data])
+    }
+    setSavingTask(false)
+    setTaskForm(null)
+  }
+
+  async function updateTaskStatus(taskId, status) {
+    await supabase.from('job_tasks').update({ status }).eq('id', taskId)
+    setJobTasks(prev => prev.map(t => t.id === taskId ? { ...t, status } : t))
+  }
+
+  async function deleteTask(taskId) {
+    if (!window.confirm('Delete this task?')) return
+    await supabase.from('job_tasks').delete().eq('id', taskId)
+    setJobTasks(prev => prev.filter(t => t.id !== taskId))
   }
 
   async function deletePO(poId) {
@@ -743,6 +790,9 @@ export default function JobDetail() {
         </button>
         <button className={`tab ${activeTab==='activity'?'active':''}`} onClick={() => setActiveTab('activity')}>
           Activity{actionLog.length > 0 ? ` (${actionLog.length})` : ''}
+        </button>
+        <button className={`tab ${activeTab==='tasks'?'active':''}`} onClick={() => setActiveTab('tasks')}>
+          Tasks{jobTasks.length > 0 ? ` (${jobTasks.length})` : ''}
         </button>
       </div>
 
@@ -1788,6 +1838,225 @@ export default function JobDetail() {
           }
         </div>
       )}
+
+      {activeTab === 'tasks' && (() => {
+        const STATUSES = ['Not Started', 'In Progress', 'Blocked', 'Waiting on Customer', 'Done', 'Passed']
+        const PRIORITIES = ['High', 'Medium', 'Low']
+        const PHASES = ['Precon', 'Engineering', 'Procurement', 'Field', 'Closeout', 'Warranty']
+        function taskAgingBucket(t) {
+          if (['Done', 'Passed'].includes(t.status)) return 'Complete'
+          if (!t.completion_date) return null
+          const d = Math.ceil((new Date(t.completion_date) - new Date()) / 86400000)
+          if (d < 0) return 'Overdue'
+          if (d <= 7) return 'Due This Week'
+          if (d <= 14) return 'Due Next 2 Weeks'
+          return null
+        }
+        function taskStatusColor(s) {
+          if (s === 'Blocked') return 'var(--color-danger)'
+          if (s === 'Waiting on Customer') return 'var(--color-warning)'
+          if (s === 'In Progress') return 'var(--color-primary)'
+          if (['Done', 'Passed'].includes(s)) return 'var(--color-success)'
+          return 'var(--color-text-2)'
+        }
+        const openCount = jobTasks.filter(t => !['Done','Passed'].includes(t.status)).length
+        const doneCount = jobTasks.filter(t => ['Done','Passed'].includes(t.status)).length
+        const emptyTask = { phase:'', sub_job:'', scope_system:'', lead:'', contractor:'', status:'Not Started', priority:'Medium', pct_complete:'', start_date:'', completion_date:'', next_action:'', blocker_notes:'' }
+        return (
+          <div className="tab-content">
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <span style={{ fontSize:13, color:'var(--color-text-2)' }}>
+                {jobTasks.length > 0 ? `${jobTasks.length} task${jobTasks.length!==1?'s':''} — ${openCount} open, ${doneCount} done` : ''}
+              </span>
+              <button className="btn btn-sm btn-primary" onClick={() => setTaskForm({ ...emptyTask })}>
+                <Plus size={13} /> Add Task
+              </button>
+            </div>
+
+            {taskForm && !taskForm.id && (
+              <div className="card" style={{ padding:'16px 20px', marginBottom:16 }}>
+                <div style={{ fontWeight:600, marginBottom:12, fontSize:13 }}>New Task</div>
+                <form onSubmit={saveTask}>
+                  <div className="form-grid">
+                    <div className="form-group"><label>Phase</label>
+                      <select value={taskForm.phase} onChange={e => setTaskForm(f => ({...f, phase: e.target.value}))}>
+                        <option value="">— None —</option>{PHASES.map(p => <option key={p}>{p}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group"><label>Sub-Job</label>
+                      <input type="text" placeholder="e.g. Fire Alarm, Low Voltage" value={taskForm.sub_job} onChange={e => setTaskForm(f => ({...f, sub_job: e.target.value}))} />
+                    </div>
+                    <div className="form-group"><label>Scope / System</label>
+                      <input type="text" placeholder="e.g. Gamewell E3" value={taskForm.scope_system} onChange={e => setTaskForm(f => ({...f, scope_system: e.target.value}))} />
+                    </div>
+                    <div className="form-group"><label>Lead</label>
+                      <input type="text" value={taskForm.lead} onChange={e => setTaskForm(f => ({...f, lead: e.target.value}))} />
+                    </div>
+                    <div className="form-group"><label>Contractor</label>
+                      <input type="text" value={taskForm.contractor} onChange={e => setTaskForm(f => ({...f, contractor: e.target.value}))} />
+                    </div>
+                    <div className="form-group"><label>Status</label>
+                      <select value={taskForm.status} onChange={e => setTaskForm(f => ({...f, status: e.target.value}))}>
+                        {STATUSES.map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group"><label>Priority</label>
+                      <select value={taskForm.priority} onChange={e => setTaskForm(f => ({...f, priority: e.target.value}))}>
+                        {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group"><label>% Complete (0–100)</label>
+                      <input type="number" min="0" max="100" step="1" value={taskForm.pct_complete} onChange={e => setTaskForm(f => ({...f, pct_complete: e.target.value}))} />
+                    </div>
+                    <div className="form-group"><label>Start Date</label>
+                      <input type="date" value={taskForm.start_date} onChange={e => setTaskForm(f => ({...f, start_date: e.target.value}))} />
+                    </div>
+                    <div className="form-group"><label>Due Date</label>
+                      <input type="date" value={taskForm.completion_date} onChange={e => setTaskForm(f => ({...f, completion_date: e.target.value}))} />
+                    </div>
+                    <div className="form-group full"><label>Next Action</label>
+                      <input type="text" value={taskForm.next_action} onChange={e => setTaskForm(f => ({...f, next_action: e.target.value}))} />
+                    </div>
+                    <div className="form-group full"><label>Blocker / Notes</label>
+                      <input type="text" value={taskForm.blocker_notes} onChange={e => setTaskForm(f => ({...f, blocker_notes: e.target.value}))} />
+                    </div>
+                  </div>
+                  <div className="form-actions" style={{ marginTop:10 }}>
+                    <button type="submit" className="btn btn-primary" disabled={savingTask}>
+                      {savingTask ? <span className="spinner" style={{width:14,height:14}}/> : 'Save Task'}
+                    </button>
+                    <button type="button" className="btn" onClick={() => setTaskForm(null)}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {jobTasks.length === 0 && !taskForm
+              ? <div className="empty-state"><p>No tasks yet. Add one to start tracking field progress.</p></div>
+              : jobTasks.length > 0 && (
+                <div className="card"><div className="table-wrap">
+                  <table>
+                    <thead><tr>
+                      <th>Phase</th><th>Sub-Job</th><th>Scope / System</th><th>Lead</th><th>Contractor</th>
+                      <th>Status</th><th>Pri</th><th>% Done</th><th>Due Date</th><th>Bucket</th>
+                      <th>Next Action</th><th>Blocker / Notes</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {jobTasks.map(t => (
+                        <>
+                          <tr key={t.id}>
+                            <td style={{fontSize:12}}>{t.phase||'—'}</td>
+                            <td style={{fontSize:12}}>{t.sub_job||'—'}</td>
+                            <td style={{fontSize:12}}>{t.scope_system||'—'}</td>
+                            <td style={{fontSize:12}}>{t.lead||'—'}</td>
+                            <td style={{fontSize:12}}>{t.contractor||'—'}</td>
+                            <td onClick={e=>e.stopPropagation()}>
+                              <select value={t.status} onChange={e=>updateTaskStatus(t.id,e.target.value)}
+                                style={{fontSize:11,padding:'2px 4px',borderRadius:4,border:'1px solid var(--color-border)',color:taskStatusColor(t.status),background:'var(--color-card)',minWidth:120}}>
+                                {STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </td>
+                            <td>
+                              {t.priority==='High' && <span className="badge badge-red" style={{fontSize:10}}>High</span>}
+                              {t.priority==='Medium' && <span className="badge badge-amber" style={{fontSize:10}}>Med</span>}
+                              {t.priority==='Low' && <span className="badge badge-gray" style={{fontSize:10}}>Low</span>}
+                            </td>
+                            <td>
+                              <div className="progress-wrap" style={{minWidth:60}}>
+                                <div className="progress-bar"><div className="progress-fill" style={{width:`${Math.min(100,(t.pct_complete||0)*100)}%`}}/></div>
+                                <span style={{fontSize:11,color:'var(--color-text-2)'}}>{fmt.pct(t.pct_complete)}</span>
+                              </div>
+                            </td>
+                            <td style={{fontSize:12,whiteSpace:'nowrap'}}>{t.completion_date?fmt.date(t.completion_date):'—'}</td>
+                            <td>{(() => {
+                              const b = taskAgingBucket(t)
+                              if (!b) return null
+                              const colors = {Overdue:{bg:'var(--color-danger)',c:'#fff'},'Due This Week':{bg:'var(--color-warning)',c:'#fff'},'Due Next 2 Weeks':{bg:'#3b82f6',c:'#fff'},Complete:{bg:'var(--color-success)',c:'#fff'}}
+                              const s = colors[b]
+                              return s ? <span className="badge" style={{background:s.bg,color:s.c,fontSize:10}}>{b}</span> : null
+                            })()}</td>
+                            <td style={{fontSize:12,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={t.next_action}>{t.next_action||<span style={{color:'var(--color-text-3)'}}>—</span>}</td>
+                            <td style={{fontSize:12,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',background:t.blocker_notes?'rgba(245,158,11,0.08)':undefined}} title={t.blocker_notes}>{t.blocker_notes||<span style={{color:'var(--color-text-3)'}}>—</span>}</td>
+                            <td>
+                              <div style={{display:'flex',gap:4}}>
+                                <button className="btn btn-sm" onClick={() => setTaskForm({...t, pct_complete: t.pct_complete!=null?(t.pct_complete*100).toFixed(0):''})}>
+                                  <Pencil size={11}/>
+                                </button>
+                                <button className="btn btn-sm" style={{color:'var(--color-danger)'}} onClick={()=>deleteTask(t.id)}>
+                                  <Trash2 size={11}/>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {taskForm?.id === t.id && (
+                            <tr key={`edit-${t.id}`}>
+                              <td colSpan={13} style={{padding:'12px 16px',background:'var(--color-sidebar)'}}>
+                                <div style={{fontWeight:600,marginBottom:12,fontSize:13}}>Edit Task</div>
+                                <form onSubmit={saveTask}>
+                                  <div className="form-grid">
+                                    <div className="form-group"><label>Phase</label>
+                                      <select value={taskForm.phase} onChange={e=>setTaskForm(f=>({...f,phase:e.target.value}))}>
+                                        <option value="">— None —</option>{PHASES.map(p=><option key={p}>{p}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="form-group"><label>Sub-Job</label>
+                                      <input type="text" value={taskForm.sub_job} onChange={e=>setTaskForm(f=>({...f,sub_job:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group"><label>Scope / System</label>
+                                      <input type="text" value={taskForm.scope_system} onChange={e=>setTaskForm(f=>({...f,scope_system:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group"><label>Lead</label>
+                                      <input type="text" value={taskForm.lead} onChange={e=>setTaskForm(f=>({...f,lead:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group"><label>Contractor</label>
+                                      <input type="text" value={taskForm.contractor} onChange={e=>setTaskForm(f=>({...f,contractor:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group"><label>Status</label>
+                                      <select value={taskForm.status} onChange={e=>setTaskForm(f=>({...f,status:e.target.value}))}>
+                                        {STATUSES.map(s=><option key={s}>{s}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="form-group"><label>Priority</label>
+                                      <select value={taskForm.priority} onChange={e=>setTaskForm(f=>({...f,priority:e.target.value}))}>
+                                        {PRIORITIES.map(p=><option key={p}>{p}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="form-group"><label>% Complete</label>
+                                      <input type="number" min="0" max="100" step="1" value={taskForm.pct_complete} onChange={e=>setTaskForm(f=>({...f,pct_complete:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group"><label>Start Date</label>
+                                      <input type="date" value={taskForm.start_date||''} onChange={e=>setTaskForm(f=>({...f,start_date:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group"><label>Due Date</label>
+                                      <input type="date" value={taskForm.completion_date||''} onChange={e=>setTaskForm(f=>({...f,completion_date:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group full"><label>Next Action</label>
+                                      <input type="text" value={taskForm.next_action||''} onChange={e=>setTaskForm(f=>({...f,next_action:e.target.value}))}/>
+                                    </div>
+                                    <div className="form-group full"><label>Blocker / Notes</label>
+                                      <input type="text" value={taskForm.blocker_notes||''} onChange={e=>setTaskForm(f=>({...f,blocker_notes:e.target.value}))}/>
+                                    </div>
+                                  </div>
+                                  <div className="form-actions" style={{marginTop:10}}>
+                                    <button type="submit" className="btn btn-primary" disabled={savingTask}>
+                                      {savingTask?<span className="spinner" style={{width:14,height:14}}/>:'Save Task'}
+                                    </button>
+                                    <button type="button" className="btn" onClick={()=>setTaskForm(null)}>Cancel</button>
+                                  </div>
+                                </form>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      ))}
+                    </tbody>
+                  </table>
+                </div></div>
+              )
+            }
+          </div>
+        )
+      })()}
 
       </div>
 

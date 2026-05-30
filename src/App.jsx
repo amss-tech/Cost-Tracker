@@ -22,6 +22,7 @@ import BOMImport from './pages/BOMImport'
 import FieldReport from './pages/FieldReport'
 import Inventory from './pages/Inventory'
 import FoundationHistoryImport from './pages/FoundationHistoryImport'
+import ProjectTracker from './pages/ProjectTracker'
 
 function PrivateRoute({ session, children }) {
   if (!session) return <Navigate to="/login" replace />
@@ -74,6 +75,7 @@ export default function App() {
                 <Route path="/bom-import" element={<BOMImport />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/foundation-history-import" element={<FoundationHistoryImport />} />
+                <Route path="/tracker" element={<ProjectTracker />} />
               </Routes>
             </Shell>
           </PrivateRoute>

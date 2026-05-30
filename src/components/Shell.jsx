@@ -10,6 +10,7 @@ const nav = [
   { label: 'Views', section: true },
   { label: 'Dashboard', path: '/', icon: LayoutDashboard },
   { label: 'Jobs', path: '/jobs', icon: Briefcase },
+  { label: 'Project Tracker', path: '/tracker', icon: ClipboardList },
   { label: 'Forecast', path: '/forecast', icon: CalendarDays },
   { label: 'Overhead Hours', path: '/overhead-hours', icon: Users },
   { label: 'Field Reports', path: '/field-report', icon: ClipboardList },
